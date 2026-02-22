@@ -11,6 +11,7 @@ import BudgetSelect from "@/components/BudgetSelect";
 import { GOALS, ROOM_TYPES, STYLES, BUDGET_TIERS } from "@/lib/cozylogic/constants";
 
 type StepKey = "upload" | "goal" | "style" | "budget" | "review";
+
 const STEPS: { key: StepKey; label: string }[] = [
   { key: "upload", label: "Upload" },
   { key: "goal", label: "Goal" },
@@ -24,11 +25,22 @@ const DEFAULT_GOAL = "modern" as (typeof GOALS)[number];
 const DEFAULT_STYLE = "cozy_neutral" as (typeof STYLES)[number];
 const DEFAULT_BUDGET = "under_500" as (typeof BUDGET_TIERS)[number];
 
+const PHOTO_TIPS = [
+  "Use a clear, well-lit photo (daylight or bright room light). Avoid heavy shadows.",
+  "Hold still and keep it sharp (no motion blur). Don’t use video screenshots.",
+  "Capture the whole room from one corner/doorway so walls + furniture are visible.",
+  "Keep the camera level (straight horizon). Avoid extreme wide-angle/“0.5x” if possible.",
+  "Don’t use filters (no heavy HDR/beauty/color grading). Normal photo is best.",
+  "Messy is OK—just make sure the clutter is visible (we’ll tidy realistically).",
+];
+
 export default function NewRedesignPage() {
   const router = useRouter();
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
 
+  // Steps
   const [step, setStep] = useState<StepKey>("upload");
+  const stepIndex = useMemo(() => STEPS.findIndex((s) => s.key === step), [step]);
 
   // Core selections
   const [roomType, setRoomType] = useState<(typeof ROOM_TYPES)[number]>("living_room");
@@ -46,8 +58,6 @@ export default function NewRedesignPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const stepIndex = STEPS.findIndex((s) => s.key === step);
-
   const canContinue =
     (step === "upload" && !!inputImagePath) ||
     (step === "goal" && !!goal) ||
@@ -58,12 +68,23 @@ export default function NewRedesignPage() {
   async function requireUser() {
     const { data, error } = await supabase.auth.getUser();
     if (error) throw error;
+
     if (!data.user) {
       router.replace("/login");
       return null;
     }
+
     return data.user;
   }
+
+  const persistRoomPatch = async (patch: Record<string, any>) => {
+    if (!roomId) return;
+    try {
+      await supabase.from("rooms").update(patch).eq("id", roomId);
+    } catch {
+      // non-fatal
+    }
+  };
 
   const ensureDraftRoom = async () => {
     if (!inputImagePath) return null;
@@ -76,12 +97,12 @@ export default function NewRedesignPage() {
       const user = await requireUser();
       if (!user) return null;
 
-      // Create a draft row with safe defaults (avoids NOT NULL errors)
       const payload = {
         user_id: user.id,
         room_type: roomType,
         input_image_path: inputImagePath,
         status: "draft",
+        // safe defaults (avoid NOT NULL failures)
         goal: DEFAULT_GOAL,
         style_key: DEFAULT_STYLE,
         budget_tier: DEFAULT_BUDGET,
@@ -105,17 +126,7 @@ export default function NewRedesignPage() {
     }
   };
 
-  const persistRoomPatch = async (patch: Record<string, any>) => {
-    if (!roomId) return;
-
-    try {
-      await supabase.from("rooms").update(patch).eq("id", roomId);
-    } catch {
-      // non-fatal (we’ll still allow user to proceed)
-    }
-  };
-
-  // Persist as user selects values (no inserts here — only update the existing room row)
+  // Persist selections as they change (updates only; draft is created when leaving upload)
   useEffect(() => {
     if (!roomId) return;
 
@@ -131,7 +142,6 @@ export default function NewRedesignPage() {
   const goNext = async () => {
     setError(null);
 
-    // Leaving upload → create room draft now
     if (step === "upload") {
       const id = await ensureDraftRoom();
       if (!id) return;
@@ -149,8 +159,8 @@ export default function NewRedesignPage() {
 
   const onGenerate = async () => {
     setError(null);
-
-    if (!roomId || !inputImagePath) {
+  
+    if (!inputImagePath) {
       setError("Please upload a photo first.");
       return;
     }
@@ -158,32 +168,51 @@ export default function NewRedesignPage() {
       setError("Please complete all steps before generating.");
       return;
     }
-
+  
     setBusy(true);
     try {
-      // Ensure latest selections are saved before generating
-      await persistRoomPatch({
+      // ✅ Always ensure we have a room id (covers refresh/state loss)
+      let id = roomId;
+      if (!id) {
+        id = await ensureDraftRoom();
+        if (!id) {
+          setError("Could not initialize room.");
+          return;
+        }
+      }
+  
+      // ✅ Save latest selections + mark generating for spam guard + status polling UI
+      await supabase.from("rooms").update({
         room_type: roomType,
         goal,
         style_key: styleKey,
         budget_tier: budgetTier,
-        status: "queued",
-      });
-
+        status: "generating",
+        generation_status: "queued",
+        generation_error: null,
+      }).eq("id", id);
+  
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ roomId }),
+        body: JSON.stringify({ roomId: id }),
       });
-
-      const json = await res.json();
-
+  
+      // ✅ spam guard: already generating → go to progress screen
+      if (res.status === 409) {
+        router.replace(`/app/result/${id}`);
+        router.refresh();
+        return;
+      }
+  
+      const json = await res.json().catch(() => ({}));
+  
       if (!res.ok) {
         setError(json?.error ?? "Generation failed.");
         return;
       }
-
-      router.replace(`/app/result/${roomId}`);
+  
+      router.replace(`/app/result/${id}`);
       router.refresh();
     } catch (e: any) {
       setError(e?.message ?? "Generation failed.");
@@ -233,6 +262,18 @@ export default function NewRedesignPage() {
                         </option>
                       ))}
                     </select>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-[#EAEAEA] bg-[#FAF9F7] p-4">
+                  <div className="text-sm font-medium">Photo tips for best results</div>
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[#6A6A6A]">
+                    {PHOTO_TIPS.map((t) => (
+                      <li key={t}>{t}</li>
+                    ))}
+                  </ul>
+                  <div className="mt-2 text-xs text-[#6A6A6A]">
+                    Best results come from a bright, sharp, wide view of the room with the camera held level.
                   </div>
                 </div>
 
@@ -341,7 +382,7 @@ export default function NewRedesignPage() {
               disabled={busy || !canContinue}
               className="rounded-xl bg-[#1F1F1F] px-4 py-2 text-sm font-medium text-white shadow-sm disabled:opacity-50"
             >
-              {step === "review" ? "Generate" : "Continue"}
+              {step === "review" ? (busy ? "Generating…" : "Generate") : "Continue"}
             </button>
           </div>
         </div>
