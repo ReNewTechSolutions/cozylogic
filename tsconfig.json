@@ -1,9 +1,6 @@
 {
   "compilerOptions": {
     "baseUrl": ".",
-    "module": "esnext",
-    "moduleResolution": "bundler",
-    "moduleDetection": "force",
     "paths": {
       "@/*": [
         "./*"
@@ -28,7 +25,9 @@
       {
         "name": "next"
       }
-    ]
+    ],
+    "module": "esnext",
+    "moduleResolution": "node"
   },
   "include": [
     "next-env.d.ts",

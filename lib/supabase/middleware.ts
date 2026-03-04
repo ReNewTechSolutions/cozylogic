@@ -7,8 +7,13 @@ type CookieToSet = {
   options?: Parameters<NextResponse["cookies"]["set"]>[2];
 };
 
-export async function updateSession(request: NextRequest) {
-  let response = NextResponse.next({ request });
+/**
+ * Updates Supabase auth cookies on server requests.
+ * Important: never rewrite/redirect API routes here unless you intend to.
+ */
+export async function updateSession(req: NextRequest) {
+  // Create a passthrough response we can attach cookies to
+  const res = NextResponse.next();
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
@@ -16,19 +21,19 @@ export async function updateSession(request: NextRequest) {
     {
       cookies: {
         getAll() {
-          return request.cookies.getAll();
+          return req.cookies.getAll();
         },
         setAll(cookiesToSet: CookieToSet[]) {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            response.cookies.set(name, value, options);
-          });
+          for (const { name, value, options } of cookiesToSet) {
+            res.cookies.set(name, value, options);
+          }
         },
       },
     }
   );
 
-  // Refresh session cookies if needed
+  // Refresh session cookies if needed (no-op if already valid)
   await supabase.auth.getUser();
 
-  return response;
+  return res;
 }

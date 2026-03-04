@@ -1,47 +1,33 @@
 // components/GenerationOverlay.tsx
 "use client";
 
+import { generationStepLabel } from "@/lib/cozylogic/statusText";
 import { useRoomStatusPoll } from "@/hooks/useRoomStatusPoll";
 
-function generationStepLabel(stepRaw: string | null | undefined) {
-  const step = String(stepRaw ?? "").toLowerCase();
-
-  switch (step) {
-    case "queued":
-      return { title: "Starting…", sub: "Preparing your room photo." };
-    case "tidy":
-      return { title: "Pass 1 of 2", sub: "Tidying and organizing the room." };
-    case "rearrange":
-      return { title: "Pass 2 of 2", sub: "Rearranging your existing furniture." };
-    case "redesign":
-      return { title: "Pass 2 of 2", sub: "Designing the new layout and style." };
-    case "uploading":
-      return { title: "Finalizing…", sub: "Saving your new design." };
-    case "done":
-    case "generated":
-      return { title: "Done", sub: "Your design is ready." };
-    case "error":
-      return { title: "Something went wrong", sub: "Please try again." };
-    default:
-      return { title: "Working…", sub: "This can take a minute." };
-  }
-}
+const DEBUG = process.env.NEXT_PUBLIC_DEBUG_STATUS === "1";
 
 export default function GenerationOverlay({ roomId }: { roomId: string }) {
-  const { data } = useRoomStatusPoll(roomId, true);
+  const { data, error } = useRoomStatusPoll(roomId, true);
 
   const status = data?.status ?? "";
   const step = data?.generation_status ?? "";
   const err = data?.generation_error ?? "";
+  const pollErr = error ?? "";
 
   const isWorking =
     status === "queued" ||
     status === "generating" ||
     (step && step !== "done" && step !== "generated" && step !== "error");
 
-  if (!isWorking && !err) return null;
+  // show overlay if working OR if server returned an error string (generation_error) OR polling failed
+  if (!isWorking && !err && !pollErr) return null;
 
-  const label = generationStepLabel(step);
+  if (DEBUG) {
+    // eslint-disable-next-line no-console
+    console.log("[Overlay]", { roomId, status, step, err, pollErr });
+  }
+
+  const label = generationStepLabel(err ? "error" : step);
 
   return (
     <div className="fixed inset-0 z-[100] grid place-items-center bg-black/50 backdrop-blur-sm">
@@ -54,9 +40,9 @@ export default function GenerationOverlay({ roomId }: { roomId: string }) {
           </div>
         </div>
 
-        {err ? (
+        {(err || pollErr) ? (
           <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {err}
+            {err || pollErr}
           </div>
         ) : (
           <div className="mt-4 text-xs text-[#6A6A6A]">

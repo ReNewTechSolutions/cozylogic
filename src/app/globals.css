@@ -1,0 +1,92 @@
+@import "tailwindcss";
+
+/* -------------------------------------------------------
+   CozyLogic base: calm, warm, minimal (like before)
+-------------------------------------------------------- */
+
+:root {
+  --bg: 250 249 247;         /* #FAF9F7 */
+  --panel: 255 255 255;      /* white */
+  --ink: 31 31 31;           /* #1F1F1F */
+  --muted: 106 106 106;      /* #6A6A6A */
+  --border: 234 234 234;     /* #EAEAEA */
+  --brand: 111 131 115;      /* #6F8373 */
+  --shadow: 0 10px 30px rgba(0,0,0,0.06);
+}
+
+/* Tailwind v4: put base styling in @layer base */
+@layer base {
+  html, body {
+    height: 100%;
+  }
+
+  body {
+    background: rgb(var(--bg));
+    color: rgb(var(--ink));
+    font-feature-settings: "kern";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Typography baseline */
+  h1, h2, h3, h4, h5, h6 {
+    letter-spacing: -0.02em;
+  }
+
+  /* Links */
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  /* Selection */
+  ::selection {
+    background: rgba(111, 131, 115, 0.20);
+  }
+
+  /* Form elements baseline (matches your UI) */
+  input, select, textarea, button {
+    font: inherit;
+  }
+
+  input, select, textarea {
+    background: white;
+    border: 1px solid rgb(var(--border));
+    border-radius: 12px;
+    outline: none;
+  }
+
+  input:focus, select:focus, textarea:focus {
+    border-color: rgb(var(--brand));
+    box-shadow: 0 0 0 3px rgba(111, 131, 115, 0.18);
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
+}
+
+/* -------------------------------------------------------
+   Small utility classes you were relying on “implicitly”
+-------------------------------------------------------- */
+
+@layer utilities {
+  .cozy-card {
+    background: rgb(var(--panel));
+    border: 1px solid rgb(var(--border));
+    border-radius: 16px;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.02);
+  }
+
+  .cozy-shadow {
+    box-shadow: var(--shadow);
+  }
+
+  .cozy-muted {
+    color: rgb(var(--muted));
+  }
+
+  .cozy-border {
+    border-color: rgb(var(--border));
+  }
+}

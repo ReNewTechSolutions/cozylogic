@@ -2,8 +2,8 @@
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 
-export async function getSupabaseServerClient() {
-  const store: any = await cookies();
+export function getSupabaseServerClient() {
+  const cookieStore = cookies();
 
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
@@ -11,11 +11,11 @@ export async function getSupabaseServerClient() {
     {
       cookies: {
         getAll() {
-          if (typeof store.getAll === "function") return store.getAll();
-          return [];
+          return cookieStore.getAll();
         },
         setAll() {
-          // no-op in Server Components
+          // Server Components can't set cookies.
+          // Cookie writes must happen in Middleware or Route Handlers.
         },
       },
     }
