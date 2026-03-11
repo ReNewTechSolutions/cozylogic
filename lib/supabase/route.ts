@@ -1,6 +1,12 @@
 // lib/supabase/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { createServerClient } from "@supabase/ssr";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
+
+type CookieToSet = {
+  name: string;
+  value: string;
+  options?: CookieOptions;
+};
 
 export function getSupabaseRouteClient(req: NextRequest, res: NextResponse) {
   return createServerClient(
@@ -11,7 +17,7 @@ export function getSupabaseRouteClient(req: NextRequest, res: NextResponse) {
         getAll() {
           return req.cookies.getAll();
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet: CookieToSet[]) {
           cookiesToSet.forEach(({ name, value, options }) => {
             res.cookies.set(name, value, options);
           });
