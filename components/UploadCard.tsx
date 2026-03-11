@@ -49,7 +49,7 @@ export default function UploadCard({
       }
     }
 
-    run();
+    void run();
     return () => {
       cancelled = true;
     };
@@ -82,19 +82,43 @@ export default function UploadCard({
         return;
       }
 
-      // RLS requires: `${auth.uid()}/...`
       const ext = safeExt(extFromName(file.name));
       const path = `${user.id}/${crypto.randomUUID()}.${ext}`;
 
-      const { error: uploadErr } = await supabase.storage
-        .from(STORAGE_BUCKET_INPUTS)
-        .upload(path, file, {
-          cacheControl: "3600",
-          upsert: false,
-          contentType: file.type || "image/jpeg",
-        });
+      const signedRes = await fetch("/api/images/signed-url", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ path }),
+      });
 
-      if (uploadErr) throw uploadErr;
+      const signedJson = await signedRes.json().catch(() => ({} as any));
+
+      if (!signedRes.ok) {
+        throw new Error(signedJson?.error ?? "Could not create upload URL.");
+      }
+
+      const signedUrl = signedJson?.signedUrl as string | undefined;
+      const token = signedJson?.token as string | undefined;
+
+      if (!signedUrl || !token) {
+        throw new Error("Upload URL response was incomplete.");
+      }
+
+      const uploadRes = await fetch(signedUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Type": file.type || "image/jpeg",
+          "x-upsert": "false",
+        },
+        body: file,
+      });
+
+      if (!uploadRes.ok) {
+        const text = await uploadRes.text().catch(() => "");
+        throw new Error(text || "Upload failed.");
+      }
 
       onChange(path);
     } catch (e: any) {
@@ -156,11 +180,7 @@ export default function UploadCard({
           <div className="mt-2 aspect-[4/3] w-full overflow-hidden rounded-xl border border-[#EAEAEA] bg-white">
             {previewUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={previewUrl}
-                alt="Room preview"
-                className="h-full w-full object-cover"
-              />
+              <img src={previewUrl} alt="Room preview" className="h-full w-full object-cover" />
             ) : (
               <div className="flex h-full items-center justify-center text-xs text-[#6A6A6A]">
                 {value ? (previewBusy ? "Loading…" : "Preview unavailable") : "—"}
