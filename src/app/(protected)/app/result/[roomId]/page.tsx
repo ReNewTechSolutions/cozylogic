@@ -1,4 +1,3 @@
-// app/(protected)/app/result/[roomId]/page.tsx
 import { redirect } from "next/navigation";
 import Image from "next/image";
 
@@ -10,9 +9,7 @@ type PageProps = {
   params: Promise<{ roomId: string }>;
 };
 
-export default async function ResultPage(
-  { params }: { params: Promise<{ roomId: string }> }
-) {
+export default async function ResultPage({ params }: PageProps) {
   const { roomId } = await params;
 
   const supabase = await getSupabaseServerClient();
@@ -52,7 +49,6 @@ export default async function ResultPage(
     );
   }
 
-  // Latest generation (not deleted)
   const { data: gen } = await supabase
     .from("generations")
     .select("id,output_image_path,watermarked,created_at")
@@ -62,8 +58,7 @@ export default async function ResultPage(
     .limit(1)
     .maybeSingle();
 
-  // Signed URLs
-  const signedTtl = 60 * 30; // 30 min
+  const signedTtl = 60 * 30;
   let inputUrl: string | null = null;
   let outputUrl: string | null = null;
 
@@ -92,7 +87,6 @@ export default async function ResultPage(
 
   return (
     <main className="min-h-screen bg-[#FAF9F7] text-[#1F1F1F]">
-      {/* Client overlay that polls /api/rooms/[roomId]/status */}
       <GenerationOverlay roomId={room.id} />
 
       <div className="mx-auto w-full max-w-[980px] px-6 py-10">
