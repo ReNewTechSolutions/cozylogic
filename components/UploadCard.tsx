@@ -43,7 +43,6 @@ export default function UploadCard({
         const url = await getSignedUrl(STORAGE_BUCKET_INPUTS, value);
         if (!cancelled) setPreviewUrl(url);
       } catch {
-        // non-fatal; user can still continue
       } finally {
         if (!cancelled) setPreviewBusy(false);
       }
@@ -99,25 +98,21 @@ export default function UploadCard({
         throw new Error(signedJson?.error ?? "Could not create upload URL.");
       }
 
-      const signedUrl = signedJson?.signedUrl as string | undefined;
       const token = signedJson?.token as string | undefined;
 
-      if (!signedUrl || !token) {
+      if (!token) {
         throw new Error("Upload URL response was incomplete.");
       }
 
-      const uploadRes = await fetch(signedUrl, {
-        method: "PUT",
-        headers: {
-          "Content-Type": file.type || "image/jpeg",
-          "x-upsert": "false",
-        },
-        body: file,
-      });
+      const { error: uploadErr } = await supabase.storage
+        .from(STORAGE_BUCKET_INPUTS)
+        .uploadToSignedUrl(path, token, file, {
+          contentType: file.type || "image/jpeg",
+          upsert: false,
+        });
 
-      if (!uploadRes.ok) {
-        const text = await uploadRes.text().catch(() => "");
-        throw new Error(text || "Upload failed.");
+      if (uploadErr) {
+        throw uploadErr;
       }
 
       onChange(path);
@@ -179,7 +174,6 @@ export default function UploadCard({
           <div className="text-xs font-medium text-[#6A6A6A]">Preview</div>
           <div className="mt-2 aspect-[4/3] w-full overflow-hidden rounded-xl border border-[#EAEAEA] bg-white">
             {previewUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
               <img src={previewUrl} alt="Room preview" className="h-full w-full object-cover" />
             ) : (
               <div className="flex h-full items-center justify-center text-xs text-[#6A6A6A]">
