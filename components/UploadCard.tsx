@@ -40,11 +40,20 @@ export default function UploadCard({
 
       setPreviewBusy(true);
       try {
-        const url = await getSignedUrl(STORAGE_BUCKET_INPUTS, value);
-        if (!cancelled) setPreviewUrl(url);
-      } catch {
+        const url = await getSignedUrl(supabase, STORAGE_BUCKET_INPUTS, value);
+        console.log("PREVIEW bucket", STORAGE_BUCKET_INPUTS);
+        console.log("PREVIEW path", value);
+        console.log("PREVIEW signedUrl", url);
+
+        if (!cancelled) {
+          setPreviewUrl(url);
+        }
+      } catch (e) {
+        console.error("PREVIEW signed URL failed", e);
       } finally {
-        if (!cancelled) setPreviewBusy(false);
+        if (!cancelled) {
+          setPreviewBusy(false);
+        }
       }
     }
 
@@ -52,7 +61,7 @@ export default function UploadCard({
     return () => {
       cancelled = true;
     };
-  }, [value]);
+  }, [supabase, value]);
 
   const onPick = async (file: File | null) => {
     setErr(null);
@@ -72,6 +81,7 @@ export default function UploadCard({
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       console.log("UPLOAD session", sessionData.session);
+
       const {
         data: { user },
         error: userErr,
