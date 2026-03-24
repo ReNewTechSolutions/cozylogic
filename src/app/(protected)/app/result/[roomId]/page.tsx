@@ -1,5 +1,4 @@
 import { redirect } from "next/navigation";
-import Image from "next/image";
 
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { STORAGE_BUCKET_INPUTS, STORAGE_BUCKET_OUTPUTS } from "@/lib/cozylogic/constants";
@@ -11,6 +10,10 @@ type PageProps = {
 
 export default async function ResultPage({ params }: PageProps) {
   const { roomId } = await params;
+
+  if (!roomId || roomId === "undefined") {
+    redirect("/app");
+  }
 
   const supabase = await getSupabaseServerClient();
   const {
@@ -119,7 +122,8 @@ export default async function ResultPage({ params }: PageProps) {
             <div className="mb-3 text-sm font-medium">Before</div>
             <div className="relative aspect-[3/2] overflow-hidden rounded-xl bg-[#F2F2F2]">
               {inputUrl ? (
-                <Image src={inputUrl} alt="Before" fill className="object-cover" />
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={inputUrl} alt="Before" className="h-full w-full object-cover" />
               ) : (
                 <div className="grid h-full place-items-center text-sm text-[#6A6A6A]">
                   No input image
@@ -132,7 +136,8 @@ export default async function ResultPage({ params }: PageProps) {
             <div className="mb-3 text-sm font-medium">After</div>
             <div className="relative aspect-[3/2] overflow-hidden rounded-xl bg-[#F2F2F2]">
               {outputUrl ? (
-                <Image src={outputUrl} alt="After" fill className="object-cover" />
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={outputUrl} alt="After" className="h-full w-full object-cover" />
               ) : isWorking ? (
                 <div className="grid h-full place-items-center p-6 text-center">
                   <div className="text-sm font-medium">Generating…</div>

@@ -70,10 +70,13 @@ export default function UploadCard({
 
     setBusy(true);
     try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      console.log("UPLOAD session", sessionData.session);
       const {
         data: { user },
         error: userErr,
       } = await supabase.auth.getUser();
+      console.log("UPLOAD user", user, userErr);
 
       if (userErr) throw userErr;
       if (!user) {
