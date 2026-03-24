@@ -1,23 +1,14 @@
-// src/app/auth/callback/route.ts
-import { NextRequest, NextResponse } from "next/server";
-import { createServerClient, type CookieOptions } from "@supabase/ssr";
+import { NextResponse } from "next/server";
+import { createServerClient } from "@supabase/ssr";
+import { cookies } from "next/headers";
 
-type CookieToSet = {
-  name: string;
-  value: string;
-  options?: CookieOptions;
-};
-
-export async function GET(request: NextRequest) {
+export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get("code");
-  const next = requestUrl.searchParams.get("next") || "/app";
+  const origin = requestUrl.origin;
 
-  const response = NextResponse.redirect(new URL(next, requestUrl.origin));
-
-  if (!code) {
-    return response;
-  }
+  const cookieStore = await cookies();
+  const response = NextResponse.redirect(`${origin}/app`);
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
@@ -25,9 +16,9 @@ export async function GET(request: NextRequest) {
     {
       cookies: {
         getAll() {
-          return request.cookies.getAll();
+          return cookieStore.getAll();
         },
-        setAll(cookiesToSet: CookieToSet[]) {
+        setAll(cookiesToSet) {
           cookiesToSet.forEach(({ name, value, options }) => {
             response.cookies.set(name, value, options);
           });
@@ -36,7 +27,9 @@ export async function GET(request: NextRequest) {
     }
   );
 
-  await supabase.auth.exchangeCodeForSession(code);
+  if (code) {
+    await supabase.auth.exchangeCodeForSession(code);
+  }
 
   return response;
 }
