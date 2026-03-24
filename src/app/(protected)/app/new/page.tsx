@@ -1,7 +1,7 @@
 // src/app/(protected)/app/new/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
@@ -34,14 +34,7 @@ const PHOTO_TIPS = [
 export default function NewRedesignPage() {
   const router = useRouter();
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
-
-  useEffect(() => {
-    async function check() {
-      const { data } = await supabase.auth.getSession();
-      console.log("NEW PAGE session", data.session);
-    }
-    void check();
-  }, [supabase]);
+  const draftRoomPromiseRef = useRef<Promise<string | null> | null>(null);
 
   const [step, setStep] = useState<StepKey>("upload");
   const stepIndex = STEPS.findIndex((s) => s.key === step);
@@ -74,11 +67,15 @@ export default function NewRedesignPage() {
     return data.user;
   }
 
-  async function patchRoom(id: string, patch: Record<string, any>) {
-    try {
-      await supabase.from("rooms").update(patch).eq("id", id);
-    } catch {
-      // non-fatal
+  async function patchRoom(
+    id: string,
+    patch: Record<string, any>,
+    opts?: { silent?: boolean }
+  ) {
+    const { error } = await supabase.from("rooms").update(patch).eq("id", id);
+
+    if (error && !opts?.silent) {
+      throw error;
     }
   }
 
@@ -86,58 +83,63 @@ export default function NewRedesignPage() {
     if (!inputImagePath) return null;
     if (roomId) return roomId;
 
-    setBusy(true);
-    setError(null);
-
-    try {
-      const user = await requireUser();
-      if (!user) return null;
-
-      const payload = {
-        user_id: user.id,
-        room_type: roomType,
-        input_image_path: inputImagePath,
-        status: "draft",
-        goal: DEFAULT_GOAL,
-        style_key: DEFAULT_STYLE,
-        budget_tier: DEFAULT_BUDGET,
-        generation_status: null,
-        generation_error: null,
-      };
-
-      const { data, error: insertErr } = await supabase
-        .from("rooms")
-        .insert(payload)
-        .select("id")
-        .single();
-
-      if (insertErr) throw insertErr;
-
-      setRoomId(data.id);
-      return data.id as string;
-    } catch (e: any) {
-      setError(e?.message ?? "Could not start redesign.");
-      return null;
-    } finally {
-      setBusy(false);
+    if (draftRoomPromiseRef.current) {
+      return draftRoomPromiseRef.current;
     }
-  }
 
-  useEffect(() => {
-    if (!roomId) return;
-    const patch: Record<string, any> = { room_type: roomType };
-    if (goal) patch.goal = goal;
-    if (styleKey) patch.style_key = styleKey;
-    if (budgetTier) patch.budget_tier = budgetTier;
-    void patchRoom(roomId, patch);
-  }, [roomId, roomType, goal, styleKey, budgetTier]);
+    const promise = (async () => {
+      setBusy(true);
+      setError(null);
+
+      try {
+        const user = await requireUser();
+        if (!user) return null;
+
+        const payload = {
+          user_id: user.id,
+          room_type: roomType,
+          input_image_path: inputImagePath,
+          status: "draft",
+          goal: DEFAULT_GOAL,
+          style_key: DEFAULT_STYLE,
+          budget_tier: DEFAULT_BUDGET,
+          generation_status: null,
+          generation_error: null,
+        };
+
+        const { data, error: insertErr } = await supabase
+          .from("rooms")
+          .insert(payload)
+          .select("id")
+          .single();
+
+        if (insertErr) throw insertErr;
+        if (!data?.id) throw new Error("room_insert_missing_id");
+
+        setRoomId(data.id);
+        return data.id as string;
+      } catch (e: any) {
+        setError(e?.message ?? "Could not start redesign.");
+        return null;
+      } finally {
+        draftRoomPromiseRef.current = null;
+        setBusy(false);
+      }
+    })();
+
+    draftRoomPromiseRef.current = promise;
+    return promise;
+  }
 
   const goNext = async () => {
     setError(null);
 
     if (step === "upload") {
       const id = await ensureDraftRoom();
-      if (!id) return;
+      if (!id) {
+        setError((prev) => prev ?? "Please upload a room photo to continue.");
+        return;
+      }
     }
 
     const next = STEPS[Math.min(stepIndex + 1, STEPS.length - 1)].key;
@@ -169,21 +171,24 @@ export default function NewRedesignPage() {
 
       if (!id) {
         id = await ensureDraftRoom();
-        if (!id) {
-          setError("Failed to create room. Please try again.");
-          return;
-        }
       }
 
-      console.log("GENERATE roomId", id);
+      if (!id) {
+        setError("Failed to create room. Please try again.");
+        return;
+      }
 
-      await patchRoom(id, {
-        room_type: roomType,
-        goal,
-        style_key: styleKey,
-        budget_tier: budgetTier,
-        status: "draft",
-      });
+      await patchRoom(
+        id,
+        {
+          room_type: roomType,
+          goal,
+          style_key: styleKey,
+          budget_tier: budgetTier,
+          status: "draft",
+        },
+        { silent: false }
+      );
 
       const res = await fetch("/api/generate", {
         method: "POST",
@@ -200,11 +205,6 @@ export default function NewRedesignPage() {
       const json = await res.json().catch(() => ({} as any));
       if (!res.ok) {
         setError((json as any)?.error ?? "Generation failed.");
-        return;
-      }
-
-      if (!id) {
-        setError("Something went wrong. No room ID.");
         return;
       }
 
