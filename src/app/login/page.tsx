@@ -1,121 +1,176 @@
-// src/app/login/page.tsx
-"use client";
+import { redirect } from "next/navigation";
 
-import Link from "next/link";
-import { Suspense, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
+import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { STORAGE_BUCKET_INPUTS, STORAGE_BUCKET_OUTPUTS } from "@/lib/cozylogic/constants";
+import GenerationOverlay from "@/components/GenerationOverlay";
 
-function LoginPageInner() {
-  const searchParams = useSearchParams();
-  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
+type PageProps = {
+  params: Promise<{ roomId: string }>;
+};
 
-  const [email, setEmail] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+export default async function ResultPage({ params }: PageProps) {
+  const { roomId } = await params;
 
-  const next = searchParams.get("next") || "/app";
+  if (!roomId || roomId === "undefined") {
+    redirect("/app");
+  }
 
-  const onMagicLink = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    setNotice(null);
+  const supabase = await getSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-    try {
-      const origin =
-        typeof window !== "undefined" ? window.location.origin : "http://localhost:3000";
+  if (!user) redirect("/login?next=/app");
 
-      const { error } = await supabase.auth.signInWithOtp({
-        email: email.trim(),
-        options: {
-          emailRedirectTo: `${origin}/auth/callback?next=${encodeURIComponent(next)}`,
-        },
-      });
+  const { data: room, error: roomErr } = await supabase
+    .from("rooms")
+    .select(
+      "id,user_id,room_type,goal,style_key,budget_tier,input_image_path,status,generation_status,generation_error"
+    )
+    .eq("id", roomId)
+    .single();
 
-      if (error) throw error;
+  if (roomErr || !room) {
+    return (
+      <main className="min-h-screen bg-[#FAF9F7] p-8 text-[#1F1F1F]">
+        <div className="mx-auto max-w-3xl rounded-2xl border border-[#EAEAEA] bg-white p-6 shadow-sm">
+          <h1 className="text-xl font-semibold">Not found</h1>
+          <p className="mt-2 text-sm text-[#6A6A6A]">That room could not be loaded.</p>
+        </div>
+      </main>
+    );
+  }
 
-      setNotice("Magic link sent. Check your email and use the link on this device/browser.");
-    } catch (e: any) {
-      setError(e?.message ?? "Could not send magic link.");
-    } finally {
-      setBusy(false);
-    }
-  };
+  if (room.user_id !== user.id) {
+    return (
+      <main className="min-h-screen bg-[#FAF9F7] p-8 text-[#1F1F1F]">
+        <div className="mx-auto max-w-3xl rounded-2xl border border-[#EAEAEA] bg-white p-6 shadow-sm">
+          <h1 className="text-xl font-semibold">Forbidden</h1>
+          <p className="mt-2 text-sm text-[#6A6A6A]">You don’t have access to this room.</p>
+        </div>
+      </main>
+    );
+  }
+
+  const { data: gen } = await supabase
+    .from("generations")
+    .select("id,output_image_path,watermarked,created_at")
+    .eq("room_id", room.id)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const signedTtl = 60 * 30;
+  let inputUrl: string | null = null;
+  let outputUrl: string | null = null;
+
+  if (room.input_image_path) {
+    const { data } = await supabase.storage
+      .from(STORAGE_BUCKET_INPUTS)
+      .createSignedUrl(room.input_image_path, signedTtl);
+    inputUrl = data?.signedUrl ?? null;
+  }
+
+  if (gen?.output_image_path) {
+    const { data } = await supabase.storage
+      .from(STORAGE_BUCKET_OUTPUTS)
+      .createSignedUrl(gen.output_image_path, signedTtl);
+    outputUrl = data?.signedUrl ?? null;
+  }
+
+  const status = room.status ?? "";
+  const step = room.generation_status ?? "";
+  const err = room.generation_error ?? "";
+
+  const isWorking =
+    status === "queued" ||
+    status === "generating" ||
+    (step && step !== "done" && step !== "generated" && step !== "error");
 
   return (
     <main className="min-h-screen bg-[#FAF9F7] text-[#1F1F1F]">
-      <div className="mx-auto w-full max-w-[560px] px-6 py-14">
-        <div className="mb-6">
-          <div className="text-sm tracking-wide text-[#6A6A6A]">CozyLogic</div>
-          <h1 className="mt-2 text-3xl font-semibold leading-tight">Sign in</h1>
-          <p className="mt-2 text-[15px] leading-relaxed text-[#6A6A6A]">
-            Enter your email and we&apos;ll send you a secure sign-in link.
-          </p>
-        </div>
+      <GenerationOverlay roomId={room.id} />
 
-        <div className="rounded-2xl border border-[#EAEAEA] bg-white p-6 shadow-sm">
-          <form onSubmit={onMagicLink} className="space-y-4">
-            <div>
-              <label htmlFor="email" className="text-sm text-[#6A6A6A]">
-                Email
-              </label>
-              <input
-                id="email"
-                type="email"
-                autoComplete="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                className="mt-1 w-full rounded-xl border border-[#EAEAEA] bg-white px-4 py-3 text-[15px] outline-none focus:border-[#6F8373]"
-                required
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={busy}
-              className="w-full rounded-xl bg-[#6F8373] px-4 py-3 text-sm font-medium text-white shadow-sm disabled:opacity-60"
-            >
-              {busy ? "Sending link…" : "Send magic link"}
-            </button>
-          </form>
-
-          {error && (
-            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {error}
-            </div>
-          )}
-
-          {notice && (
-            <div className="mt-4 rounded-xl border border-[#EAEAEA] bg-[#FAF9F7] px-4 py-3 text-sm text-[#1F1F1F]">
-              {notice}
-            </div>
-          )}
-
-          <div className="mt-5 rounded-xl border border-[#EAEAEA] bg-[#FAF9F7] px-4 py-3 text-sm text-[#6A6A6A]">
-            New users can use the same form. Supabase will handle sign-in / sign-up through the email link.
+      <div className="mx-auto w-full max-w-[980px] px-6 py-10">
+        <div className="flex items-start justify-between gap-6">
+          <div>
+            <div className="text-sm tracking-wide text-[#6A6A6A]">CozyLogic</div>
+            <h1 className="mt-2 text-3xl font-semibold leading-tight">Your redesign</h1>
+            <p className="mt-2 text-[15px] leading-relaxed text-[#6A6A6A]">
+              {room.room_type?.replaceAll("_", " ")} • {room.style_key?.replaceAll("_", " ")} •{" "}
+              {room.budget_tier?.replaceAll("_", " ")}
+            </p>
           </div>
+
+          <a
+            href="/app"
+            className="rounded-xl border border-[#EAEAEA] bg-white px-4 py-2 text-sm font-medium shadow-sm"
+          >
+            Back to Dashboard
+          </a>
         </div>
 
-        <div className="mt-6 flex items-center justify-between text-sm text-[#6A6A6A]">
-          <Link href="/" className="underline">
-            Back to home
-          </Link>
-          <Link href="/app/new" className="underline">
-            Try the app
-          </Link>
+        {err ? (
+          <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {err}
+          </div>
+        ) : null}
+
+        <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <div className="rounded-2xl border border-[#EAEAEA] bg-white p-4 shadow-sm">
+            <div className="mb-3 text-sm font-medium">Before</div>
+            <div className="relative aspect-[3/2] overflow-hidden rounded-xl bg-[#F2F2F2]">
+              {inputUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={inputUrl} alt="Before" className="h-full w-full object-cover" />
+              ) : (
+                <div className="grid h-full place-items-center text-sm text-[#6A6A6A]">
+                  No input image
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-[#EAEAEA] bg-white p-4 shadow-sm">
+            <div className="mb-3 text-sm font-medium">After</div>
+            <div className="relative aspect-[3/2] overflow-hidden rounded-xl bg-[#F2F2F2]">
+              {outputUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={outputUrl} alt="After" className="h-full w-full object-cover" />
+              ) : isWorking ? (
+                <div className="grid h-full place-items-center p-6 text-center">
+                  <div className="text-sm font-medium">Generating…</div>
+                  <div className="mt-1 text-xs text-[#6A6A6A]">
+                    Keep this page open — your design will appear here automatically.
+                  </div>
+                </div>
+              ) : (
+                <div className="grid h-full place-items-center p-6 text-center">
+                  <div className="text-sm font-medium">No design yet</div>
+                  <div className="mt-1 text-xs text-[#6A6A6A]">Go back and click Generate.</div>
+                </div>
+              )}
+            </div>
+
+            {outputUrl ? (
+              <div className="mt-3 flex items-center justify-between">
+                <div className="text-xs text-[#6A6A6A]">
+                  Generated {gen?.created_at ? new Date(gen.created_at).toLocaleString() : ""}
+                </div>
+                <a
+                  href={outputUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-lg border px-3 py-1.5 text-sm"
+                >
+                  Open image
+                </a>
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
     </main>
-  );
-}
-
-export default function LoginPage() {
-  return (
-    <Suspense fallback={<div className="min-h-screen bg-[#FAF9F7]" />}>
-      <LoginPageInner />
-    </Suspense>
   );
 }
