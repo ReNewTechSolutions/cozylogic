@@ -1,54 +1,177 @@
 // components/GenerationOverlay.tsx
 "use client";
 
-import { generationStepLabel } from "@/lib/cozylogic/statusText";
-import { useRoomStatusPoll } from "@/hooks/useRoomStatusPoll";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
-const DEBUG = process.env.NEXT_PUBLIC_DEBUG_STATUS === "1";
+type Props = {
+  roomId: string;
+};
 
-export default function GenerationOverlay({ roomId }: { roomId: string }) {
-  const { data, error } = useRoomStatusPoll(roomId, true);
+type StatusResponse = {
+  id?: string;
+  status?: string | null;
+  generation_status?: string | null;
+  generation_error?: string | null;
+  updated_at?: string | null;
+  error?: string;
+};
 
-  const status = data?.status ?? "";
-  const step = data?.generation_status ?? "";
-  const err = data?.generation_error ?? "";
-  const pollErr = error ?? "";
+const STAGES = [
+  { until: 15, label: "Reading your room…", sublabel: "Analyzing the photo and room structure." },
+  { until: 35, label: "Applying Reality Lock™…", sublabel: "Preserving layout, perspective, and major room elements." },
+  { until: 60, label: "Designing the transformation…", sublabel: "Building the new look based on your style and goal." },
+  { until: 85, label: "Rendering your redesign…", sublabel: "Generating the final before-and-after concept." },
+  { until: 99, label: "Finalizing details…", sublabel: "Preparing the result for display." },
+] as const;
 
-  const isWorking =
-    status === "queued" ||
-    status === "generating" ||
-    (step && step !== "done" && step !== "generated" && step !== "error");
+function getStage(progress: number) {
+  return STAGES.find((stage) => progress <= stage.until) ?? STAGES[STAGES.length - 1];
+}
 
-  // show overlay if working OR if server returned an error string (generation_error) OR polling failed
-  if (!isWorking && !err && !pollErr) return null;
+export default function GenerationOverlay({ roomId }: Props) {
+  const router = useRouter();
+  const [visible, setVisible] = useState(true);
+  const [progress, setProgress] = useState(7);
+  const [serverStatus, setServerStatus] = useState<string>("queued");
+  const [serverStep, setServerStep] = useState<string>("");
+  const [error, setError] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const finishedRef = useRef(false);
 
-  if (DEBUG) {
-    // eslint-disable-next-line no-console
-    console.log("[Overlay]", { roomId, status, step, err, pollErr });
-  }
+  const stage = useMemo(() => getStage(progress), [progress]);
 
-  const label = generationStepLabel(err ? "error" : step);
+  useEffect(() => {
+    if (!visible || finishedRef.current) return;
+
+    const timer = window.setInterval(() => {
+      setProgress((current) => {
+        if (current >= 96) return current;
+        if (current < 20) return current + 3;
+        if (current < 45) return current + 2;
+        if (current < 75) return current + 1;
+        return current + 0.5;
+      });
+    }, 900);
+
+    return () => window.clearInterval(timer);
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible || finishedRef.current) return;
+
+    let cancelled = false;
+
+    async function poll() {
+      try {
+        const res = await fetch(`/api/rooms/${roomId}/status`, {
+          method: "GET",
+          cache: "no-store",
+        });
+
+        const json: StatusResponse = await res.json().catch(() => ({}));
+
+        if (cancelled) return;
+
+        if (!res.ok) {
+          setError(json?.error ?? "Unable to check generation status.");
+          return;
+        }
+
+        const nextStatus = json.status ?? "";
+        const nextStep = json.generation_status ?? "";
+        const nextError = json.generation_error ?? null;
+
+        setServerStatus(nextStatus);
+        setServerStep(nextStep);
+
+        if (nextError) {
+          setError(nextError);
+          return;
+        }
+
+        const isDone =
+          nextStatus === "generated" ||
+          nextStep === "generated" ||
+          nextStep === "done";
+
+        if (isDone) {
+          finishedRef.current = true;
+          setProgress(100);
+          setIsRefreshing(true);
+
+          window.setTimeout(() => {
+            setVisible(false);
+            router.refresh();
+          }, 700);
+        }
+      } catch {
+        if (!cancelled) {
+          setError("Unable to reach the generation service.");
+        }
+      }
+    }
+
+    void poll();
+    const interval = window.setInterval(poll, 2500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [roomId, router, visible]);
+
+  if (!visible) return null;
+
+  const statusLine = error
+    ? error
+    : isRefreshing
+      ? "Your redesign is ready. Loading result…"
+      : serverStep
+        ? `Live status: ${serverStep.replaceAll("_", " ")}`
+        : serverStatus
+          ? `Live status: ${serverStatus.replaceAll("_", " ")}`
+          : "Working on your redesign…";
 
   return (
-    <div className="fixed inset-0 z-[100] grid place-items-center bg-black/50 backdrop-blur-sm">
-      <div className="w-[min(520px,92vw)] rounded-2xl bg-white p-6 shadow-xl">
-        <div className="flex items-center gap-3">
-          <div className="h-10 w-10 animate-spin rounded-full border-4 border-[#EAEAEA] border-t-[#1F1F1F]" />
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/35 px-4 backdrop-blur-sm">
+      <div className="w-full max-w-[560px] rounded-[28px] border border-white/20 bg-white p-6 shadow-2xl sm:p-7">
+        <div className="flex items-start justify-between gap-4">
           <div>
-            <div className="text-base font-semibold">{label.title}</div>
-            <div className="text-sm text-[#6A6A6A]">{label.sub}</div>
+            <div className="text-xs font-medium uppercase tracking-[0.2em] text-[#6A6A6A]">
+              CozyLogic is working
+            </div>
+            <h2 className="mt-2 text-2xl font-semibold tracking-[-0.02em] text-[#1F1F1F]">
+              {isRefreshing ? "Finishing up…" : stage.label}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-[#6A6A6A]">
+              {isRefreshing ? "Pulling your final redesign onto the page now." : stage.sublabel}
+            </p>
+          </div>
+          <div className="shrink-0 rounded-full border border-[#EAEAEA] bg-[#FAF9F7] px-3 py-1 text-sm font-medium text-[#1F1F1F]">
+            {Math.min(100, Math.round(progress))}%
           </div>
         </div>
 
-        {(err || pollErr) ? (
-          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {err || pollErr}
+        <div className="mt-6 overflow-hidden rounded-full bg-[#ECE9E4]">
+          <div
+            className="h-3 rounded-full bg-[#6F8373] transition-[width] duration-500 ease-out"
+            style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
+          />
+        </div>
+
+        <div className="mt-4 rounded-2xl border border-[#EAEAEA] bg-[#FAF9F7] px-4 py-3">
+          <div className="text-xs font-medium uppercase tracking-wide text-[#6A6A6A]">
+            Status
           </div>
-        ) : (
-          <div className="mt-4 text-xs text-[#6A6A6A]">
-            This can take a minute. Please don’t refresh or click generate again.
+          <div className={`mt-1 text-sm ${error ? "text-red-700" : "text-[#1F1F1F]"}`}>
+            {statusLine}
           </div>
-        )}
+        </div>
+
+        <div className="mt-4 text-xs leading-5 text-[#6A6A6A]">
+          Image generation can take a bit. Please avoid refreshing or clicking generate again.
+        </div>
       </div>
     </div>
   );

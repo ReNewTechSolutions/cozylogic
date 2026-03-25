@@ -88,6 +88,15 @@ export default async function ResultPage({ params }: PageProps) {
     status === "generating" ||
     (step && step !== "done" && step !== "generated" && step !== "error");
 
+  // Expire after 30 minutes (same as signed URL TTL)
+  let isExpired = false;
+  if (gen?.created_at) {
+    const created = new Date(gen.created_at).getTime();
+    const now = Date.now();
+    const ttlMs = 30 * 60 * 1000;
+    isExpired = now - created > ttlMs;
+  }
+
   return (
     <main className="min-h-screen bg-[#FAF9F7] text-[#1F1F1F]">
       <GenerationOverlay roomId={room.id} />
@@ -136,8 +145,24 @@ export default async function ResultPage({ params }: PageProps) {
             <div className="mb-3 text-sm font-medium">After</div>
             <div className="relative aspect-[3/2] overflow-hidden rounded-xl bg-[#F2F2F2]">
               {outputUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={outputUrl} alt="After" className="h-full w-full object-cover" />
+                <>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={outputUrl}
+                    alt="After"
+                    className={`h-full w-full object-cover ${isExpired ? "blur-sm opacity-80" : ""}`}
+                  />
+                  {isExpired && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+                      <a
+                        href="/login"
+                        className="rounded-xl bg-white px-4 py-2 text-sm font-medium shadow"
+                      >
+                        Unlock this design
+                      </a>
+                    </div>
+                  )}
+                </>
               ) : isWorking ? (
                 <div className="grid h-full place-items-center p-6 text-center">
                   <div className="text-sm font-medium">Generating…</div>
