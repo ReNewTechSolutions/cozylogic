@@ -1,11 +1,19 @@
-// src/app/api/images/signed-url/route.ts
+// src/app/api/rooms/[roomId]/status/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseRouteClient } from "@/lib/supabase/route";
-import { STORAGE_BUCKET_INPUTS } from "@/lib/cozylogic/constants";
 
-export async function POST(req: NextRequest) {
-  const response = NextResponse.json({ ok: true });
-  const supabase = getSupabaseRouteClient(req, response);
+export async function GET(
+  req: NextRequest,
+  ctx: { params: Promise<{ roomId: string }> }
+) {
+  const { roomId } = await ctx.params;
+
+  if (!roomId || roomId === "undefined") {
+    return NextResponse.json({ error: "invalid_room_id" }, { status: 400 });
+  }
+
+  const res = NextResponse.next();
+  const supabase = getSupabaseRouteClient(req, res);
 
   const {
     data: { user },
@@ -16,28 +24,25 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "invalid_json" }, { status: 400 });
+  const { data: room, error } = await supabase
+    .from("rooms")
+    .select("id,user_id,status,generation_status,generation_error,updated_at")
+    .eq("id", roomId)
+    .single();
+
+  if (error || !room) {
+    return NextResponse.json({ error: "room_not_found" }, { status: 404 });
   }
 
-  const path = body?.path as string | undefined;
-  if (!path) {
-    return NextResponse.json({ error: "missing_path" }, { status: 400 });
+  if (room.user_id !== user.id) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
-  const { data, error } = await supabase.storage
-    .from(STORAGE_BUCKET_INPUTS)
-    .createSignedUploadUrl(path);
-
-  if (error) {
-    return NextResponse.json(
-      { error: error.message ?? "signed_url_failed" },
-      { status: 500 }
-    );
-  }
-
-  return NextResponse.json(data, { status: 200 });
+  return NextResponse.json({
+    id: room.id,
+    status: room.status,
+    generation_status: room.generation_status,
+    generation_error: room.generation_error,
+    updated_at: room.updated_at,
+  });
 }
