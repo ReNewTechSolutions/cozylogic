@@ -3,6 +3,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 import { getSignedUrl } from "@/lib/cozylogic/images";
 import {
   STORAGE_BUCKET_INPUTS,
@@ -38,6 +39,7 @@ export type RecentCard = {
 };
 
 export default function RecentDesignGrid({ items }: { items: RecentCard[] }) {
+  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const [beforeMap, setBeforeMap] = useState<Record<string, string>>({});
   const [afterMap, setAfterMap] = useState<Record<string, string>>({});
 
@@ -54,22 +56,24 @@ export default function RecentDesignGrid({ items }: { items: RecentCard[] }) {
         items.map(async (item) => {
           try {
             const before = await getSignedUrl(
+              supabase,
               STORAGE_BUCKET_INPUTS,
               item.room.input_image_path
             );
             nextBefore[item.generation_id] = before;
-          } catch {
-            // ignore
+          } catch (e) {
+            console.error("RECENT before signed URL failed", item.generation_id, e);
           }
 
           try {
             const after = await getSignedUrl(
+              supabase,
               STORAGE_BUCKET_OUTPUTS,
               item.output_image_path
             );
             nextAfter[item.generation_id] = after;
-          } catch {
-            // ignore
+          } catch (e) {
+            console.error("RECENT after signed URL failed", item.generation_id, e);
           }
         })
       );
@@ -80,12 +84,17 @@ export default function RecentDesignGrid({ items }: { items: RecentCard[] }) {
       }
     }
 
-    if (items.length) run();
+    if (items.length) {
+      void run();
+    } else {
+      setBeforeMap({});
+      setAfterMap({});
+    }
 
     return () => {
       cancelled = true;
     };
-  }, [ids.join("|")]); // stable-ish dependency
+  }, [ids.join("|"), items, supabase]);
 
   return (
     <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
