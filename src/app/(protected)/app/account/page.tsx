@@ -1,4 +1,3 @@
-// app/(protected)/app/account/page.tsx
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
