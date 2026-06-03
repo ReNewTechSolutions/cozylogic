@@ -45,11 +45,28 @@ describe("route smoke checks", () => {
   it("keeps new generation flow pointed at /api/generate and result pages", () => {
     const page = read("src/app/(protected)/app/new/page.tsx");
     const route = read("src/app/api/generate/route.ts");
+    const status = read("src/app/api/generate/status/route.ts");
 
     assert.match(page, /fetch\("\/api\/generate"/);
-    assert.match(page, /router\.replace\(`\/app\/result\/\$\{id\}`\)/);
+    assert.match(page, /GenerationOverlay/);
+    assert.match(page, /\/api\/generate\/status\?id=/);
+    assert.match(route, /after\(async \(\) =>/);
+    assert.match(route, /getJobResponse/);
+    assert.match(route, /idempotencyKey/);
     assert.match(route, /\.eq\("status", "draft"\)/);
     assert.match(route, /generation_status: "queued"/);
+    assert.match(status, /resultUrl: `\/app\/result\/\$\{room\.id\}`/);
+  });
+
+  it("keeps demo generation idempotent and waiting on status", () => {
+    const page = read("src/app/demo/page.tsx");
+    const route = read("src/app/api/demo/generate/route.ts");
+
+    assert.match(page, /GenerationOverlay/);
+    assert.match(page, /\/api\/demo\/\$\{encodeURIComponent\(token\)\}\/status/);
+    assert.match(route, /buildDemoIdempotencyKey/);
+    assert.match(route, /\.eq\("trial_token", idempotencyKey\)/);
+    assert.match(route, /getConfiguredImageModel\(\)/);
   });
 
   it("uses one path-param generation delete route", () => {

@@ -1,15 +1,19 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRef, useState } from "react";
 import {
   GOALS,
   ROOM_TYPES,
   STYLES,
   BUDGET_TIERS,
 } from "@/lib/cozylogic/constants";
+import GenerationOverlay from "@/components/GenerationOverlay";
 
 type ModeKey = "reality_lock" | "precision" | "creative";
+type DemoGenerationJob = {
+  statusUrl?: string;
+  redirectTo?: string;
+};
 
 const MODE_OPTIONS: { key: ModeKey; title: string; body: string }[] = [
   {
@@ -38,7 +42,7 @@ function getStrengthLabel(strength: number) {
 }
 
 export default function DemoPage() {
-  const router = useRouter();
+  const submitRef = useRef(false);
 
   const [file, setFile] = useState<File | null>(null);
   const [roomType, setRoomType] = useState<(typeof ROOM_TYPES)[number]>("living_room");
@@ -49,16 +53,23 @@ export default function DemoPage() {
   const [strength, setStrength] = useState(60);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [generationJob, setGenerationJob] = useState<DemoGenerationJob | null>(null);
 
   const onSubmit = async () => {
+    if (submitRef.current) return;
+
+    submitRef.current = true;
     setError(null);
 
     if (!file) {
+      submitRef.current = false;
       setError("Please upload a photo first.");
       return;
     }
 
     setBusy(true);
+    setGenerationJob({});
+    let shouldKeepWaiting = false;
 
     try {
       const form = new FormData();
@@ -87,16 +98,28 @@ export default function DemoPage() {
         throw new Error("Missing demo token.");
       }
 
-      router.push(`/demo/result/${token}`);
+      setGenerationJob({
+        statusUrl: json.statusUrl ?? `/api/demo/${encodeURIComponent(token)}/status`,
+        redirectTo: json.resultUrl ?? `/demo/result/${token}`,
+      });
+      shouldKeepWaiting = true;
     } catch (e: any) {
+      setGenerationJob(null);
       setError(e?.message ?? "Failed to generate.");
     } finally {
-      setBusy(false);
+      if (!shouldKeepWaiting) {
+        submitRef.current = false;
+        setBusy(false);
+      }
     }
   };
 
   return (
     <main className="min-h-screen bg-[#FAF9F7] text-[#1F1F1F]">
+      {generationJob ? (
+        <GenerationOverlay statusUrl={generationJob.statusUrl} redirectTo={generationJob.redirectTo} />
+      ) : null}
+
       <div className="mx-auto max-w-[920px] px-6 py-12">
         <div>
           <div className="text-sm tracking-wide text-[#6A6A6A]">CozyLogic Demo</div>
@@ -237,7 +260,7 @@ export default function DemoPage() {
           <button
             type="button"
             onClick={onSubmit}
-            disabled={busy}
+            disabled={busy || !!generationJob}
             className="mt-6 w-full rounded-xl bg-[#6F8373] px-4 py-3 text-white disabled:opacity-60"
           >
             {busy ? "Starting your redesign…" : "Generate free redesign"}

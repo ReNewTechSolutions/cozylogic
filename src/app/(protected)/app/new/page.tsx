@@ -9,10 +9,16 @@ import Stepper from "@/components/Stepper";
 import UploadCard from "@/components/UploadCard";
 import StyleTile from "@/components/StyleTile";
 import BudgetSelect from "@/components/BudgetSelect";
+import GenerationOverlay from "@/components/GenerationOverlay";
 import { GOALS, ROOM_TYPES, STYLES, BUDGET_TIERS } from "@/lib/cozylogic/constants";
 
 type StepKey = "upload" | "goal" | "style" | "mode" | "budget" | "review";
 type ModeKey = "reality_lock" | "precision" | "creative";
+type GenerationJob = {
+  id: string;
+  statusUrl: string;
+  redirectTo: string;
+};
 
 const STEPS: { key: StepKey; label: string }[] = [
   { key: "upload", label: "Upload" },
@@ -83,6 +89,7 @@ export default function NewRedesignPage() {
   const router = useRouter();
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const draftRoomPromiseRef = useRef<Promise<string | null> | null>(null);
+  const generateSubmitRef = useRef(false);
 
   const [step, setStep] = useState<StepKey>("upload");
   const stepIndex = STEPS.findIndex((s) => s.key === step);
@@ -99,6 +106,7 @@ export default function NewRedesignPage() {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [generationJob, setGenerationJob] = useState<GenerationJob | null>(null);
 
   const canContinue =
     (step === "upload" && !!inputImagePath) ||
@@ -206,19 +214,26 @@ export default function NewRedesignPage() {
   };
 
   const onGenerate = async () => {
+    if (generateSubmitRef.current) return;
+
+    generateSubmitRef.current = true;
     setError(null);
 
     if (!inputImagePath) {
+      generateSubmitRef.current = false;
       setError("Please upload a photo first.");
       return;
     }
 
     if (!goal || !styleKey || !budgetTier) {
+      generateSubmitRef.current = false;
       setError("Please complete all steps before generating.");
       return;
     }
 
     setBusy(true);
+    let shouldKeepWaiting = false;
+
     try {
       let id = roomId;
 
@@ -227,9 +242,16 @@ export default function NewRedesignPage() {
       }
 
       if (!id) {
+        generateSubmitRef.current = false;
         setError("Failed to create room. Please try again.");
         return;
       }
+
+      setGenerationJob({
+        id,
+        statusUrl: `/api/generate/status?id=${encodeURIComponent(id)}`,
+        redirectTo: `/app/result/${id}`,
+      });
 
       await patchRoom(
         id,
@@ -240,7 +262,6 @@ export default function NewRedesignPage() {
           budget_tier: budgetTier,
           mode,
           strength,
-          status: "draft",
         },
         { silent: false }
       );
@@ -251,29 +272,39 @@ export default function NewRedesignPage() {
         body: JSON.stringify({ roomId: id }),
       });
 
-      if (res.status === 409) {
-        router.replace(`/app/result/${id}`);
-        router.refresh();
-        return;
-      }
-
       const json = await res.json().catch(() => ({} as any));
       if (!res.ok) {
+        setGenerationJob(null);
         setError((json as any)?.error ?? "Generation failed.");
         return;
       }
 
-      router.replace(`/app/result/${id}`);
-      router.refresh();
+      const jobId = (json as any)?.generationId ?? id;
+      const roomResultId = (json as any)?.roomId ?? id;
+      setGenerationJob({
+        id: jobId,
+        statusUrl:
+          (json as any)?.statusUrl ?? `/api/generate/status?id=${encodeURIComponent(jobId)}`,
+        redirectTo: (json as any)?.resultUrl ?? `/app/result/${roomResultId}`,
+      });
+      shouldKeepWaiting = true;
     } catch (e: any) {
+      setGenerationJob(null);
       setError(e?.message ?? "Generation failed.");
     } finally {
-      setBusy(false);
+      if (!shouldKeepWaiting) {
+        generateSubmitRef.current = false;
+        setBusy(false);
+      }
     }
   };
 
   return (
     <main className="min-h-screen bg-[#FAF9F7] text-[#1F1F1F]">
+      {generationJob ? (
+        <GenerationOverlay statusUrl={generationJob.statusUrl} redirectTo={generationJob.redirectTo} />
+      ) : null}
+
       <div className="mx-auto w-full max-w-[900px] px-6 py-10">
         <div className="flex items-start justify-between gap-6">
           <div>
@@ -468,7 +499,7 @@ export default function NewRedesignPage() {
 
                 <button
                   type="button"
-                  disabled={busy}
+                  disabled={busy || !!generationJob}
                   onClick={onGenerate}
                   className="w-full rounded-xl bg-[#6F8373] px-4 py-3 text-sm font-medium text-white shadow-sm disabled:opacity-60"
                 >
@@ -488,7 +519,7 @@ export default function NewRedesignPage() {
             <button
               type="button"
               onClick={goBack}
-              disabled={busy || stepIndex === 0}
+              disabled={busy || !!generationJob || stepIndex === 0}
               className="rounded-xl border border-[#EAEAEA] bg-white px-4 py-2 text-sm font-medium shadow-sm disabled:opacity-50"
             >
               Back
@@ -497,7 +528,7 @@ export default function NewRedesignPage() {
             <button
               type="button"
               onClick={step === "review" ? onGenerate : goNext}
-              disabled={busy || !canContinue}
+              disabled={busy || !!generationJob || !canContinue}
               className="rounded-xl bg-[#1F1F1F] px-4 py-2 text-sm font-medium text-white shadow-sm disabled:opacity-50"
             >
               {step === "review" ? (busy ? "Generating…" : "Generate") : "Continue"}

@@ -5,7 +5,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type Props = {
-  roomId: string;
+  roomId?: string;
+  statusUrl?: string;
+  redirectTo?: string;
 };
 
 type StatusResponse = {
@@ -18,18 +20,17 @@ type StatusResponse = {
 };
 
 const STAGES = [
-  { until: 15, label: "Reading your room…", sublabel: "Analyzing the photo and room structure." },
-  { until: 35, label: "Applying Reality Lock™…", sublabel: "Preserving layout, perspective, and major room elements." },
-  { until: 60, label: "Designing the transformation…", sublabel: "Building the new look based on your style and goal." },
-  { until: 85, label: "Rendering your redesign…", sublabel: "Generating the final before-and-after concept." },
-  { until: 99, label: "Finalizing details…", sublabel: "Preparing the result for display." },
+  { until: 25, label: "Analyzing your room photo", sublabel: "Reading the layout, lighting, and perspective." },
+  { until: 50, label: "Matching your cozy style", sublabel: "Blending your selections into the room." },
+  { until: 75, label: "Building your new look", sublabel: "Creating the redesigned image." },
+  { until: 99, label: "Finalizing image", sublabel: "Preparing the finished result." },
 ] as const;
 
 function getStage(progress: number) {
   return STAGES.find((stage) => progress <= stage.until) ?? STAGES[STAGES.length - 1];
 }
 
-export default function GenerationOverlay({ roomId }: Props) {
+export default function GenerationOverlay({ roomId, statusUrl, redirectTo }: Props) {
   const router = useRouter();
   const [visible, setVisible] = useState(true);
   const [progress, setProgress] = useState(7);
@@ -40,6 +41,7 @@ export default function GenerationOverlay({ roomId }: Props) {
   const finishedRef = useRef(false);
 
   const stage = useMemo(() => getStage(progress), [progress]);
+  const pollUrl = statusUrl ?? (roomId ? `/api/rooms/${roomId}/status` : null);
 
   useEffect(() => {
     if (!visible || finishedRef.current) return;
@@ -58,13 +60,13 @@ export default function GenerationOverlay({ roomId }: Props) {
   }, [visible]);
 
   useEffect(() => {
-    if (!visible || finishedRef.current) return;
+    if (!visible || finishedRef.current || !pollUrl) return;
 
     let cancelled = false;
 
     async function poll() {
       try {
-        const res = await fetch(`/api/rooms/${roomId}/status`, {
+        const res = await fetch(pollUrl, {
           method: "GET",
           cache: "no-store",
         });
@@ -102,7 +104,11 @@ export default function GenerationOverlay({ roomId }: Props) {
 
           window.setTimeout(() => {
             setVisible(false);
-            router.refresh();
+            if (redirectTo) {
+              router.replace(redirectTo);
+            } else {
+              router.refresh();
+            }
           }, 700);
         }
       } catch {
@@ -119,7 +125,7 @@ export default function GenerationOverlay({ roomId }: Props) {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [roomId, router, visible]);
+  }, [pollUrl, redirectTo, router, visible]);
 
   if (!visible) return null;
 
@@ -170,7 +176,7 @@ export default function GenerationOverlay({ roomId }: Props) {
         </div>
 
         <div className="mt-4 text-xs leading-5 text-[#6A6A6A]">
-          Image generation can take a bit. Please avoid refreshing or clicking generate again.
+          Image generation can take a bit. Please do not refresh or click generate again.
         </div>
       </div>
     </div>
