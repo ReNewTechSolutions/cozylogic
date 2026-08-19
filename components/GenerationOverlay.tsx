@@ -5,7 +5,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type Props = {
-  roomId: string;
+  roomId?: string;
+  statusUrl?: string;
+  redirectTo?: string;
+  onRetry?: () => void;
+  onDismiss?: () => void;
+  retryLabel?: string;
 };
 
 type StatusResponse = {
@@ -18,18 +23,37 @@ type StatusResponse = {
 };
 
 const STAGES = [
-  { until: 15, label: "Reading your room…", sublabel: "Analyzing the photo and room structure." },
-  { until: 35, label: "Applying Reality Lock™…", sublabel: "Preserving layout, perspective, and major room elements." },
-  { until: 60, label: "Designing the transformation…", sublabel: "Building the new look based on your style and goal." },
-  { until: 85, label: "Rendering your redesign…", sublabel: "Generating the final before-and-after concept." },
-  { until: 99, label: "Finalizing details…", sublabel: "Preparing the result for display." },
+  { until: 25, label: "Studying your room", sublabel: "Reading the layout, lighting, and perspective." },
+  { until: 50, label: "Keeping your layout realistic", sublabel: "Protecting the room shape and walkways." },
+  { until: 75, label: "Testing cozy changes", sublabel: "Trying practical refresh ideas with your choices." },
+  { until: 99, label: "Finalizing your preview", sublabel: "Preparing the finished room refresh." },
 ] as const;
 
 function getStage(progress: number) {
   return STAGES.find((stage) => progress <= stage.until) ?? STAGES[STAGES.length - 1];
 }
 
-export default function GenerationOverlay({ roomId }: Props) {
+function friendlyGenerationError(message?: string | null) {
+  if (!message) {
+    return "We could not finish this preview. Your original photo and choices are safe.";
+  }
+
+  const cleaned = message.replaceAll("_", " ");
+  if (cleaned.toLowerCase().includes("missing openai key")) {
+    return "The image service is not configured yet. Add the server key, then try again.";
+  }
+
+  return `We could not finish this preview. ${cleaned}`;
+}
+
+export default function GenerationOverlay({
+  roomId,
+  statusUrl,
+  redirectTo,
+  onRetry,
+  onDismiss,
+  retryLabel = "Try again",
+}: Props) {
   const router = useRouter();
   const [visible, setVisible] = useState(true);
   const [progress, setProgress] = useState(7);
@@ -40,9 +64,10 @@ export default function GenerationOverlay({ roomId }: Props) {
   const finishedRef = useRef(false);
 
   const stage = useMemo(() => getStage(progress), [progress]);
+  const pollUrl = statusUrl ?? (roomId ? `/api/rooms/${roomId}/status` : null);
 
   useEffect(() => {
-    if (!visible || finishedRef.current) return;
+    if (!visible || finishedRef.current || error) return;
 
     const timer = window.setInterval(() => {
       setProgress((current) => {
@@ -55,16 +80,16 @@ export default function GenerationOverlay({ roomId }: Props) {
     }, 900);
 
     return () => window.clearInterval(timer);
-  }, [visible]);
+  }, [error, visible]);
 
   useEffect(() => {
-    if (!visible || finishedRef.current) return;
+    if (!visible || finishedRef.current || error || !pollUrl) return;
 
     let cancelled = false;
 
     async function poll() {
       try {
-        const res = await fetch(`/api/rooms/${roomId}/status`, {
+        const res = await fetch(pollUrl, {
           method: "GET",
           cache: "no-store",
         });
@@ -74,7 +99,7 @@ export default function GenerationOverlay({ roomId }: Props) {
         if (cancelled) return;
 
         if (!res.ok) {
-          setError(json?.error ?? "Unable to check generation status.");
+          setError(friendlyGenerationError(json?.error ?? "Unable to check generation status."));
           return;
         }
 
@@ -86,7 +111,18 @@ export default function GenerationOverlay({ roomId }: Props) {
         setServerStep(nextStep);
 
         if (nextError) {
-          setError(nextError);
+          setError(friendlyGenerationError(nextError));
+          return;
+        }
+
+        const isFailed =
+          nextStatus === "error" ||
+          nextStatus === "failed" ||
+          nextStep === "error" ||
+          nextStep === "failed";
+
+        if (isFailed) {
+          setError(friendlyGenerationError());
           return;
         }
 
@@ -102,12 +138,16 @@ export default function GenerationOverlay({ roomId }: Props) {
 
           window.setTimeout(() => {
             setVisible(false);
-            router.refresh();
+            if (redirectTo) {
+              router.replace(redirectTo);
+            } else {
+              router.refresh();
+            }
           }, 700);
         }
       } catch {
         if (!cancelled) {
-          setError("Unable to reach the generation service.");
+          setError("We could not reach the preview service. Check your connection and try again.");
         }
       }
     }
@@ -119,49 +159,73 @@ export default function GenerationOverlay({ roomId }: Props) {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [roomId, router, visible]);
+  }, [error, pollUrl, redirectTo, router, visible]);
 
   if (!visible) return null;
+
+  const hasError = Boolean(error);
+
+  const handleRetry = () => {
+    setVisible(false);
+    onRetry?.();
+  };
+
+  const handleDismiss = () => {
+    setVisible(false);
+    onDismiss?.();
+  };
 
   const statusLine = error
     ? error
     : isRefreshing
-      ? "Your redesign is ready. Loading result…"
+      ? "Your preview is ready. Loading result…"
       : serverStep
         ? `Live status: ${serverStep.replaceAll("_", " ")}`
         : serverStatus
           ? `Live status: ${serverStatus.replaceAll("_", " ")}`
-          : "Working on your redesign…";
+          : "Working on your room preview…";
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/35 px-4 backdrop-blur-sm">
-      <div className="w-full max-w-[560px] rounded-[28px] border border-white/20 bg-white p-6 shadow-2xl sm:p-7">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#1F1F1F]/35 px-4 backdrop-blur-sm">
+      <div className="relative w-full max-w-[560px] rounded-lg border border-[#D8C7AE] bg-[#FFF8EA] p-5 shadow-2xl sm:p-7">
+        <span
+          aria-hidden="true"
+          className="absolute -top-3 left-10 h-7 w-28 rotate-[-4deg] bg-[#E8D8BC]/90 shadow-sm"
+        />
         <div className="flex items-start justify-between gap-4">
           <div>
-            <div className="text-xs font-medium uppercase tracking-[0.2em] text-[#6A6A6A]">
-              CozyLogic is working
+            <div className="inline-flex rounded-lg border border-[#DFC588] bg-[#F7E3A6] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#5F4A2E]">
+              room mission in progress
             </div>
             <h2 className="mt-2 text-2xl font-semibold tracking-[-0.02em] text-[#1F1F1F]">
-              {isRefreshing ? "Finishing up…" : stage.label}
+              {hasError ? "This one got stuck" : isRefreshing ? "Finishing up…" : stage.label}
             </h2>
-            <p className="mt-2 text-sm leading-6 text-[#6A6A6A]">
-              {isRefreshing ? "Pulling your final redesign onto the page now." : stage.sublabel}
+            <p className="mt-2 text-sm leading-6 text-[#6A5A49]">
+              {hasError
+                ? "No worries. You can try again without refreshing the page."
+                : isRefreshing
+                  ? "Pulling your final preview onto the page now."
+                  : stage.sublabel}
             </p>
           </div>
-          <div className="shrink-0 rounded-full border border-[#EAEAEA] bg-[#FAF9F7] px-3 py-1 text-sm font-medium text-[#1F1F1F]">
+          <div className="shrink-0 rotate-[2deg] rounded-lg border border-[#D8C7AE] bg-[#FFFDF7] px-3 py-1 text-sm font-medium text-[#1F1F1F]">
             {Math.min(100, Math.round(progress))}%
           </div>
         </div>
 
-        <div className="mt-6 overflow-hidden rounded-full bg-[#ECE9E4]">
+        <div className="mt-6 overflow-hidden rounded-lg bg-[#E9DDCB]">
           <div
-            className="h-3 rounded-full bg-[#6F8373] transition-[width] duration-500 ease-out"
+            className="h-3 rounded-lg bg-[#6F8373] transition-[width] duration-500 ease-out"
             style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
           />
         </div>
 
-        <div className="mt-4 rounded-2xl border border-[#EAEAEA] bg-[#FAF9F7] px-4 py-3">
-          <div className="text-xs font-medium uppercase tracking-wide text-[#6A6A6A]">
+        <div className="relative mt-4 rounded-lg border border-[#D8C7AE] bg-[#FFFDF7] px-4 py-3">
+          <span
+            aria-hidden="true"
+            className="absolute -top-2 right-8 h-5 w-20 rotate-[3deg] bg-[#E8D8BC]/80 shadow-sm"
+          />
+          <div className="text-xs font-semibold uppercase tracking-wide text-[#7C6247]">
             Status
           </div>
           <div className={`mt-1 text-sm ${error ? "text-red-700" : "text-[#1F1F1F]"}`}>
@@ -169,9 +233,30 @@ export default function GenerationOverlay({ roomId }: Props) {
           </div>
         </div>
 
-        <div className="mt-4 text-xs leading-5 text-[#6A6A6A]">
-          Image generation can take a bit. Please avoid refreshing or clicking generate again.
-        </div>
+        {hasError ? (
+          <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+            {onRetry ? (
+              <button
+                type="button"
+                onClick={handleRetry}
+                className="min-h-[44px] rounded-lg bg-[#1F1F1F] px-4 py-2 text-sm font-semibold text-white"
+              >
+                {retryLabel}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={handleDismiss}
+              className="min-h-[44px] rounded-lg border border-[#D8C7AE] bg-[#FFFDF7] px-4 py-2 text-sm font-semibold text-[#1F1F1F]"
+            >
+              Close
+            </button>
+          </div>
+        ) : (
+          <div className="mt-4 text-xs leading-5 text-[#6A5A49]">
+            Room previews can take a bit. Please do not refresh or click preview again.
+          </div>
+        )}
       </div>
     </div>
   );

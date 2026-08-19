@@ -1,14 +1,34 @@
 // src/app/api/generate/route.ts
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getSupabaseRouteClient } from "@/lib/supabase/route";
-import { STORAGE_BUCKET_INPUTS, STORAGE_BUCKET_OUTPUTS } from "@/lib/cozylogic/constants";
-import { getPlanStateAndResetIfNeeded, incrementUsage } from "@/lib/cozylogic/plan";
+import {
+  BUDGET_LABELS,
+  BUDGET_PROMPT_MEANINGS,
+  GOAL_LABELS,
+  ROOM_LABELS,
+  STORAGE_BUCKET_INPUTS,
+  STORAGE_BUCKET_OUTPUTS,
+  STYLE_LABELS,
+} from "@/lib/cozylogic/constants";
+import {
+  getPlanStateAndResetIfNeeded,
+  incrementUsage,
+  type PlanState,
+} from "@/lib/cozylogic/plan";
 import { devBypassLimits } from "@/lib/cozylogic/dev";
 import { pruneUserGenerations } from "@/lib/cozylogic/prune";
+import {
+  getConfiguredImageModel,
+  getConfiguredImageModelFallback,
+  getConfiguredImageQuality,
+  getConfiguredImageSize,
+  type ImageQuality,
+  type ImageSize,
+} from "@/lib/cozylogic/generationConfig";
 
 type InputFidelity = "high" | "low";
 
@@ -23,10 +43,32 @@ type RoomRow = {
   status: string | null;
   generation_status: string | null;
   generation_error: string | null;
+  mode: string | null;
+  strength: number | null;
 };
+
+const ACTIVE_OR_COMPLETED_ROOM_STATUSES = ["queued", "generating", "generated"];
+const ROOM_SELECT =
+  "id,user_id,room_type,goal,style_key,budget_tier,input_image_path,status,generation_status,generation_error,mode,strength";
+
+function logGenerationTiming(
+  scope: string,
+  event: string,
+  startedAt: number,
+  details: Record<string, unknown> = {}
+) {
+  console.info(`[CozyLogic ${scope}] ${event}`, {
+    elapsedMs: Date.now() - startedAt,
+    ...details,
+  });
+}
 
 function humanize(s: string) {
   return (s ?? "").replaceAll("_", " ");
+}
+
+function friendlyLabel(labels: Partial<Record<string, string>>, value: string) {
+  return labels[value] ?? humanize(value);
 }
 
 function getMimeFromPath(path: string) {
@@ -44,6 +86,57 @@ function extFromMime(mime: string) {
 
 function supportsInputFidelity(model: string) {
   return model === "gpt-image-1";
+}
+
+function buildRoomGenerationKey(userId: string, room: RoomRow) {
+  return createHash("sha256")
+    .update(
+      [
+        "room",
+        userId,
+        room.input_image_path,
+        room.room_type,
+        room.goal,
+        room.style_key,
+        room.budget_tier,
+        room.mode ?? "precision",
+        String(room.strength ?? 60),
+      ].join("|")
+    )
+    .digest("hex");
+}
+
+function getJobResponse(roomId: string, idempotencyKey: string, reused = false) {
+  return {
+    ok: true,
+    generationId: roomId,
+    roomId,
+    idempotencyKey,
+    reused,
+    statusUrl: `/api/generate/status?id=${encodeURIComponent(roomId)}`,
+    resultUrl: `/app/result/${roomId}`,
+  };
+}
+
+async function findExistingMatchingRoom(supabase: any, userId: string, room: RoomRow) {
+  let query = supabase
+    .from("rooms")
+    .select("id,status,generation_status,generation_error,updated_at")
+    .eq("user_id", userId)
+    .eq("input_image_path", room.input_image_path)
+    .eq("room_type", room.room_type)
+    .eq("goal", room.goal)
+    .eq("style_key", room.style_key)
+    .eq("budget_tier", room.budget_tier)
+    .in("status", ACTIVE_OR_COMPLETED_ROOM_STATUSES)
+    .order("updated_at", { ascending: false })
+    .limit(1);
+
+  if (room.mode) query = query.eq("mode", room.mode);
+  if (typeof room.strength === "number") query = query.eq("strength", room.strength);
+
+  const { data } = await query.maybeSingle();
+  return data as { id: string; status: string | null; generation_status: string | null } | null;
 }
 
 function chooseInputFidelity(budgetTier: string): InputFidelity {
@@ -89,39 +182,13 @@ Style kit (Modern Minimal):
   }
 }
 
-function buildTidyPrompt() {
-  return `
-You are preparing a real photo for an interior redesign.
-
-TASK: TIDY + ORGANIZE ONLY. Do NOT redesign style. Do NOT replace major furniture.
-
-ABSOLUTE LOCK:
-- SAME room, SAME camera angle, SAME framing, SAME perspective.
-- Do NOT add/remove/move walls, windows, doors, openings, trim, baseboards, ceiling height.
-- Curtains/blinds must remain EXACTLY the same (same open/closed state + same coverage).
-- Do NOT change the visible outdoors brightness/view framing.
-- Do NOT change floor material or built-ins.
-- No text, logos, watermarks.
-- Do NOT change lens/FOV or crop.
-
-CLUTTER HANDLING:
-- Gather loose items into baskets, lidded boxes, trays, bins, drawers, or a small movable closed cabinet.
-- Keep it believable: leave 1–3 realistic items visible on surfaces.
-- Do NOT erase clutter into empty space. Replace clutter with plausible organization.
-
-RESULT:
-- Same room, same angle, but visibly tidier and more organized.
-- Lighting stays natural and consistent.
-`.trim();
-}
-
 function buildRearrangeOnlyPrompt(room: {
   room_type: string;
   goal: string;
   style_key: string;
   budget_tier: string;
 }) {
-  const style = humanize(room.style_key);
+  const style = friendlyLabel(STYLE_LABELS, room.style_key);
 
   return `
 You are an expert home stager. Create a realistic "AFTER" photo of the SAME room.
@@ -158,8 +225,12 @@ function buildRedesignPrompt(room: {
   style_key: string;
   budget_tier: string;
 }) {
-  const style = humanize(room.style_key);
+  const style = friendlyLabel(STYLE_LABELS, room.style_key);
   const kit = styleKit(room.style_key);
+  const roomType = friendlyLabel(ROOM_LABELS, room.room_type);
+  const goal = friendlyLabel(GOAL_LABELS, room.goal);
+  const budget = friendlyLabel(BUDGET_LABELS, room.budget_tier);
+  const budgetMeaning = friendlyLabel(BUDGET_PROMPT_MEANINGS, room.budget_tier);
 
   return `
 You are an expert interior designer. Create a MAGAZINE-WORTHY "AFTER" photo.
@@ -175,11 +246,14 @@ ARCHITECTURE LOCK:
 
 TRANSFORMATION REQUIREMENT:
 This must look like a full redesign, not a filter. Clearly different furniture + decor.
+Tidy and organize visible clutter during the same edit pass using believable baskets, trays, bins, or closed storage.
+Do not simply erase clutter into empty space.
 
-Room: ${humanize(room.room_type)}
-Goal: ${humanize(room.goal)}
+Room: ${roomType}
+Goal: ${goal}
 Style: ${style}
-Budget: ${humanize(room.budget_tier)}
+Budget: ${budget}
+Budget meaning: ${budgetMeaning}
 
 You may reposition furniture to create a new layout, but do not alter architecture.
 At least TWO major items must move position.
@@ -207,14 +281,6 @@ PHOTOREALISM:
 `.trim();
 }
 
-function safeJson<T = any>(s: string): T | null {
-  try {
-    return JSON.parse(s);
-  } catch {
-    return null;
-  }
-}
-
 // Buffer -> Blob (TS-safe)
 function bufferToBlob(input: Buffer, mime: string, filename: string) {
   const ab = new ArrayBuffer(input.byteLength);
@@ -227,33 +293,61 @@ function bufferToBlob(input: Buffer, mime: string, filename: string) {
 async function editImage(opts: {
   openai: OpenAI;
   model: string;
+  fallbackModel?: string | null;
   prompt: string;
   input: Buffer;
   inputMime: string;
   budgetTier: string;
+  quality: ImageQuality;
+  size: ImageSize;
   forceNoInputFidelity?: boolean;
 }) {
-  const { openai, model, prompt, input, inputMime, budgetTier, forceNoInputFidelity } = opts;
+  const {
+    openai,
+    model,
+    fallbackModel,
+    prompt,
+    input,
+    inputMime,
+    budgetTier,
+    quality,
+    size,
+    forceNoInputFidelity,
+  } = opts;
 
   const blob = bufferToBlob(input, inputMime, `input.${extFromMime(inputMime)}`);
 
-  const params: any = {
-    model,
-    prompt,
-    image: blob,
-    size: "1536x1024",
-    quality: "high",
-    output_format: "png",
-  };
+  async function runImageEdit(modelName: string) {
+    const params: any = {
+      model: modelName,
+      prompt,
+      image: blob,
+      size,
+      quality,
+      output_format: "png",
+    };
 
-  if (!forceNoInputFidelity && supportsInputFidelity(model)) {
-    params.input_fidelity = chooseInputFidelity(budgetTier);
+    if (!forceNoInputFidelity && supportsInputFidelity(modelName)) {
+      params.input_fidelity = chooseInputFidelity(budgetTier);
+    }
+
+    const img = await openai.images.edit(params);
+    const b64 = img.data?.[0]?.b64_json;
+    if (!b64) throw new Error("openai_no_image_returned");
+    return Buffer.from(b64, "base64");
   }
 
-  const img = await openai.images.edit(params);
-  const b64 = img.data?.[0]?.b64_json;
-  if (!b64) throw new Error("openai_no_image_returned");
-  return Buffer.from(b64, "base64");
+  try {
+    return await runImageEdit(model);
+  } catch (error) {
+    if (!fallbackModel) throw error;
+
+    console.warn("Primary image model failed; retrying fallback model.", {
+      model,
+      fallbackModel,
+    });
+    return runImageEdit(fallbackModel);
+  }
 }
 
 async function setRoomStep(
@@ -275,11 +369,171 @@ function isGenerating(room: Pick<RoomRow, "status" | "generation_status">) {
   );
 }
 
+async function rollbackUsageIfNeeded(opts: {
+  admin: any;
+  userId: string;
+  didIncrement: boolean;
+  prevUsed: number;
+}) {
+  if (!opts.didIncrement) return;
+
+  try {
+    await opts.admin
+      .from("profiles")
+      .update({ monthly_generations_used: opts.prevUsed })
+      .eq("id", opts.userId);
+  } catch {}
+}
+
+async function processRoomGeneration(opts: {
+  room: RoomRow;
+  userId: string;
+  planState: PlanState;
+  didIncrement: boolean;
+  prevUsed: number;
+}) {
+  const { room, userId, planState, didIncrement, prevUsed } = opts;
+  const admin = getSupabaseAdminClient();
+  const startedAt = Date.now();
+  const model = getConfiguredImageModel();
+  const fallbackModel = getConfiguredImageModelFallback(model);
+  const quality = getConfiguredImageQuality(planState.plan === "pro" ? "medium" : "low");
+  const size = getConfiguredImageSize("1024x1024");
+  const outputPath = `${userId}/${randomUUID()}.png`;
+
+  try {
+    const openaiKey = process.env.OPENAI_API_KEY;
+    if (!openaiKey) throw new Error("missing_openai_key");
+
+    await setRoomStep(admin, room.id, {
+      status: "generating",
+      generation_status: "analyzing",
+      generation_error: null,
+    });
+
+    const dl = await admin.storage.from(STORAGE_BUCKET_INPUTS).download(room.input_image_path);
+    if (dl.error) throw dl.error;
+
+    const inputBytes = Buffer.from(await dl.data.arrayBuffer());
+    const inputMime = getMimeFromPath(room.input_image_path);
+    const openai = new OpenAI({ apiKey: openaiKey });
+    logGenerationTiming("generate-job", "image input prepared", startedAt, {
+      roomId: room.id,
+      inputBytes: inputBytes.byteLength,
+      inputMime,
+    });
+
+    const isRearrangeOnly = room.budget_tier === "rearrange_only";
+
+    await setRoomStep(admin, room.id, {
+      generation_status: isRearrangeOnly ? "rearrange" : "redesign",
+    });
+
+    const prompt = isRearrangeOnly ? buildRearrangeOnlyPrompt(room) : buildRedesignPrompt(room);
+
+    logGenerationTiming("generate-job", "OpenAI image call started", startedAt, {
+      roomId: room.id,
+      model,
+      fallbackModel,
+      quality,
+      size,
+      passCount: 1,
+    });
+    let finalBytes: Buffer;
+    try {
+      finalBytes = await editImage({
+        openai,
+        model,
+        fallbackModel,
+        prompt,
+        input: inputBytes,
+        inputMime,
+        budgetTier: room.budget_tier,
+        quality,
+        size,
+      });
+      logGenerationTiming("generate-job", "OpenAI image call finished", startedAt, {
+        roomId: room.id,
+        outputBytes: finalBytes.byteLength,
+        ok: true,
+      });
+    } catch (error: any) {
+      logGenerationTiming("generate-job", "OpenAI image call finished", startedAt, {
+        roomId: room.id,
+        ok: false,
+        error: error?.message ?? "openai_image_failed",
+      });
+      throw error;
+    }
+
+    await setRoomStep(admin, room.id, { generation_status: "uploading" });
+
+    logGenerationTiming("generate-job", "Supabase upload started", startedAt, {
+      roomId: room.id,
+      outputPath,
+    });
+    const up = await admin.storage.from(STORAGE_BUCKET_OUTPUTS).upload(outputPath, finalBytes, {
+      contentType: "image/png",
+      upsert: false,
+      cacheControl: "3600",
+    });
+    if (up.error) throw up.error;
+    logGenerationTiming("generate-job", "Supabase upload finished", startedAt, {
+      roomId: room.id,
+      outputPath,
+    });
+
+    const watermarked = planState.plan !== "pro";
+
+    const { data: genRow, error: genErr } = await admin
+      .from("generations")
+      .insert({
+        room_id: room.id,
+        user_id: userId,
+        provider: "openai",
+        prompt_version: isRearrangeOnly ? "v6_1pass_rearrange" : "v6_1pass_redesign",
+        output_image_path: outputPath,
+        watermarked,
+        explanation: isRearrangeOnly
+          ? "• Rearranged existing pieces for better flow and calm\n• Tidied with organizers where useful\n• Kept furniture and architecture close to the original"
+          : "• Redesigned the space while preserving architecture\n• Tidied and styled the room in one faster pass\n• Refined layout, lighting, and textiles for stronger flow",
+      })
+      .select("id")
+      .single();
+
+    if (genErr) throw genErr;
+
+    await setRoomStep(admin, room.id, {
+      status: "generated",
+      generation_status: "done",
+      generation_error: null,
+    });
+    logGenerationTiming("generate-job", "generation marked done", startedAt, {
+      roomId: room.id,
+      generationId: genRow.id,
+    });
+
+    try {
+      await pruneUserGenerations(userId);
+    } catch {}
+  } catch (e: any) {
+    await rollbackUsageIfNeeded({ admin, userId, didIncrement, prevUsed });
+
+    await setRoomStep(admin, room.id, {
+      status: "error",
+      generation_status: "error",
+      generation_error: e?.message ?? "generation_failed",
+    });
+  }
+}
+
 export async function POST(req: NextRequest) {
-  // response object passed to supabase so it can refresh cookies if needed
+  const requestStartedAt = Date.now();
+  const requestId = randomUUID();
+  logGenerationTiming("generate", "request received", requestStartedAt, { requestId });
+
   const res = NextResponse.next();
   const supabase = getSupabaseRouteClient(req, res);
-  const admin = getSupabaseAdminClient();
 
   const {
     data: { user },
@@ -289,7 +543,6 @@ export async function POST(req: NextRequest) {
   if (authErr) return NextResponse.json({ error: authErr.message }, { status: 401 });
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  // Parse body
   let body: any;
   try {
     body = await req.json();
@@ -300,10 +553,9 @@ export async function POST(req: NextRequest) {
   const roomId = body?.roomId as string | undefined;
   if (!roomId) return NextResponse.json({ error: "missing_roomId" }, { status: 400 });
 
-  // Load room
   const { data: room, error: roomErr } = await supabase
     .from("rooms")
-    .select("id,user_id,room_type,goal,style_key,budget_tier,input_image_path,status,generation_status,generation_error")
+    .select(ROOM_SELECT)
     .eq("id", roomId)
     .single<RoomRow>();
 
@@ -314,15 +566,32 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "room_incomplete" }, { status: 400 });
   }
 
-  // quick pre-check
-  if (isGenerating(room)) {
-    return NextResponse.json({ error: "already_generating" }, { status: 409 });
+  const idempotencyKey = buildRoomGenerationKey(user.id, room);
+  const existingRoom = await findExistingMatchingRoom(supabase, user.id, room);
+
+  if (existingRoom) {
+    logGenerationTiming("generate", "response returned", requestStartedAt, {
+      requestId,
+      roomId: existingRoom.id,
+      status: 200,
+      reused: true,
+    });
+    return NextResponse.json(getJobResponse(existingRoom.id, idempotencyKey, true), { status: 200 });
   }
 
-  // ✅ ATOMIC LOCK (your required snippet)
+  if (isGenerating(room) || room.status === "generated") {
+    logGenerationTiming("generate", "response returned", requestStartedAt, {
+      requestId,
+      roomId: room.id,
+      status: 200,
+      reused: true,
+    });
+    return NextResponse.json(getJobResponse(room.id, idempotencyKey, true), { status: 200 });
+  }
+
   const { data: locked, error: lockErr } = await supabase
     .from("rooms")
-    .update({ status: "generating", generation_status: "queued", generation_error: null })
+    .update({ status: "queued", generation_status: "queued", generation_error: null })
     .eq("id", room.id)
     .eq("status", "draft")
     .select("id")
@@ -331,13 +600,31 @@ export async function POST(req: NextRequest) {
   if (lockErr) throw lockErr;
 
   if (!locked) {
+    const { data: currentRoom } = await supabase
+      .from("rooms")
+      .select("id,status,generation_status,generation_error")
+      .eq("id", room.id)
+      .maybeSingle();
+
+    if (
+      currentRoom &&
+      (ACTIVE_OR_COMPLETED_ROOM_STATUSES.includes(String(currentRoom.status)) ||
+        isGenerating(currentRoom))
+    ) {
+      logGenerationTiming("generate", "response returned", requestStartedAt, {
+        requestId,
+        roomId: room.id,
+        status: 200,
+        reused: true,
+      });
+      return NextResponse.json(getJobResponse(room.id, idempotencyKey, true), { status: 200 });
+    }
+
     return NextResponse.json({ error: "already_generating" }, { status: 409 });
   }
 
-  // Plan enforcement
   const bypass = devBypassLimits();
   const planState = await getPlanStateAndResetIfNeeded(user.id);
-
   const prevUsed = planState.used;
   const didIncrement = !bypass;
 
@@ -368,164 +655,28 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "missing_openai_key" }, { status: 500 });
   }
 
-  const model = process.env.COZYLOGIC_IMAGE_MODEL || "gpt-image-1";
-  const textModel = process.env.COZYLOGIC_TEXT_MODEL || "gpt-4.1-mini";
-  const outputPath = `${user.id}/${randomUUID()}.png`;
+  const queuedRoom: RoomRow = {
+    ...room,
+    status: "queued",
+    generation_status: "queued",
+    generation_error: null,
+  };
 
-  try {
-    // 1) Download input
-    const dl = await admin.storage.from(STORAGE_BUCKET_INPUTS).download(room.input_image_path);
-    if (dl.error) throw dl.error;
-
-    const inputBytes = Buffer.from(await dl.data.arrayBuffer());
-    const inputMime = getMimeFromPath(room.input_image_path);
-
-    const openai = new OpenAI({ apiKey: openaiKey });
-
-    // 2) PASS 1: tidy
-    await setRoomStep(supabase, room.id, { generation_status: "tidy" });
-
-    const tidyBytes = await editImage({
-      openai,
-      model,
-      prompt: buildTidyPrompt(),
-      input: inputBytes,
-      inputMime,
-      budgetTier: room.budget_tier,
-      forceNoInputFidelity: true,
+  after(async () => {
+    await processRoomGeneration({
+      room: queuedRoom,
+      userId: user.id,
+      planState,
+      didIncrement,
+      prevUsed,
     });
+  });
 
-    // 3) PASS 2
-    const isRearrangeOnly = room.budget_tier === "rearrange_only";
-
-    await setRoomStep(supabase, room.id, {
-      generation_status: isRearrangeOnly ? "rearrange" : "redesign",
-    });
-
-    const pass2Prompt = isRearrangeOnly ? buildRearrangeOnlyPrompt(room) : buildRedesignPrompt(room);
-
-    const finalBytes = await editImage({
-      openai,
-      model,
-      prompt: pass2Prompt,
-      input: tidyBytes,
-      inputMime: "image/png",
-      budgetTier: room.budget_tier,
-    });
-
-    // 4) Upload output
-    await setRoomStep(supabase, room.id, { generation_status: "uploading" });
-
-    const up = await admin.storage.from(STORAGE_BUCKET_OUTPUTS).upload(outputPath, finalBytes, {
-      contentType: "image/png",
-      upsert: false,
-      cacheControl: "3600",
-    });
-    if (up.error) throw up.error;
-
-    // 5) Persist generation row
-    const watermarked = planState.plan !== "pro";
-
-    const { data: genRow, error: genErr } = await supabase
-      .from("generations")
-      .insert({
-        room_id: room.id,
-        user_id: user.id,
-        provider: "openai",
-        prompt_version: isRearrangeOnly ? "v5_2pass_rearrange" : "v5_2pass_redesign",
-        output_image_path: outputPath,
-        watermarked,
-        explanation: isRearrangeOnly
-          ? "• Tidied + organized without replacing furniture\n• Rearranged existing pieces for better flow and calm\n• Used organizers (bins/baskets/trays) where needed"
-          : "• Tidied + organized the space while preserving architecture\n• Updated the core swap set for a clear style identity\n• Refined layout, lighting, and textiles for stronger flow",
-      })
-      .select("id")
-      .single();
-
-    if (genErr) throw genErr;
-
-    // 6) Organizer recs (best-effort)
-    try {
-      const recsPrompt = `
-You are an interior organizing expert.
-
-Given:
-- Room: ${humanize(room.room_type)}
-- Goal: ${humanize(room.goal)}
-- Style: ${humanize(room.style_key)}
-- Budget tier: ${humanize(room.budget_tier)}
-
-Return ONLY valid JSON (no markdown) with this shape:
-{
-  "items": [
-    {
-      "category": "Baskets / bins / trays / shelves / hampers / cable management / under-bed storage",
-      "name": "short product-style name",
-      "why": "1 sentence why it helps this room",
-      "placement": "where it goes in the room",
-      "size_hint": "optional short size note",
-      "finish_hint": "materials/colors that match the style"
-    }
-  ],
-  "notes": "1 short sentence"
-}
-
-Rules:
-- Do NOT invent brands, links, or retailers.
-- Suggest 5–8 items max.
-- Make suggestions realistic for a normal home.
-- Match the style with materials/finishes.
-`.trim();
-
-      const rec = await openai.chat.completions.create({
-        model: textModel,
-        temperature: 0.4,
-        messages: [
-          { role: "system", content: "Return only JSON. No markdown. No extra text." },
-          { role: "user", content: recsPrompt },
-        ],
-      });
-
-      const raw = rec.choices?.[0]?.message?.content?.trim() ?? "";
-      const parsed = safeJson(raw);
-
-      await supabase
-        .from("generations")
-        .update({
-          organizer_recs_json: parsed ?? null,
-          organizer_recs_raw: parsed ? null : raw,
-        })
-        .eq("id", genRow.id);
-    } catch {
-      // ignore
-    }
-
-    // 7) Finish
-    await setRoomStep(supabase, room.id, {
-      status: "generated",
-      generation_status: "done",
-      generation_error: null,
-    });
-
-    // 8) prune (best-effort)
-    try {
-      await pruneUserGenerations(user.id);
-    } catch {}
-
-    return NextResponse.json({ ok: true, outputPath }, { status: 200 });
-  } catch (e: any) {
-    if (didIncrement) {
-      try {
-        await incrementUsage(user.id, prevUsed);
-      } catch {}
-    }
-
-    await setRoomStep(supabase, room.id, {
-      status: "error",
-      generation_status: "error",
-      generation_error: e?.message ?? "generation_failed",
-    });
-
-    return NextResponse.json({ error: e?.message ?? "generation_failed" }, { status: 500 });
-  }
+  logGenerationTiming("generate", "response returned", requestStartedAt, {
+    requestId,
+    roomId: room.id,
+    status: 202,
+    reused: false,
+  });
+  return NextResponse.json(getJobResponse(room.id, idempotencyKey), { status: 202 });
 }

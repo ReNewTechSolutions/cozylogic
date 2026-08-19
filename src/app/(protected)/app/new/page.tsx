@@ -9,103 +9,91 @@ import Stepper from "@/components/Stepper";
 import UploadCard from "@/components/UploadCard";
 import StyleTile from "@/components/StyleTile";
 import BudgetSelect from "@/components/BudgetSelect";
-import { GOALS, ROOM_TYPES, STYLES, BUDGET_TIERS } from "@/lib/cozylogic/constants";
+import GenerationOverlay from "@/components/GenerationOverlay";
+import {
+  BUDGET_LABELS,
+  BUDGET_PREVIEW_SETTINGS,
+  BUDGET_TIERS,
+  DEFAULT_BUDGET_TIER,
+  GOALS,
+  ROOM_HELPERS,
+  ROOM_LABELS,
+  ROOM_TYPES,
+  STYLE_CHOICES,
+  STYLES,
+  STYLE_LABELS,
+} from "@/lib/cozylogic/constants";
 
-type StepKey = "upload" | "goal" | "style" | "mode" | "budget" | "review";
-type ModeKey = "reality_lock" | "precision" | "creative";
+type StepKey = "upload" | "style" | "budget" | "review";
+type GenerationJob = {
+  id: string;
+  statusUrl: string;
+  redirectTo: string;
+};
 
 const STEPS: { key: StepKey; label: string }[] = [
-  { key: "upload", label: "Upload" },
-  { key: "goal", label: "Goal" },
-  { key: "style", label: "Style" },
-  { key: "mode", label: "Mode" },
+  { key: "upload", label: "Room" },
+  { key: "style", label: "Vibe" },
   { key: "budget", label: "Budget" },
-  { key: "review", label: "Review" },
+  { key: "review", label: "Preview" },
 ];
 
-const DEFAULT_GOAL = "modern" as (typeof GOALS)[number];
+const DEFAULT_GOAL = "refresh_budget" as (typeof GOALS)[number];
 const DEFAULT_STYLE = "cozy_neutral" as (typeof STYLES)[number];
-const DEFAULT_BUDGET = "under_500" as (typeof BUDGET_TIERS)[number];
-const DEFAULT_MODE: ModeKey = "precision";
-const DEFAULT_STRENGTH = 60;
+const DEFAULT_BUDGET = DEFAULT_BUDGET_TIER;
+const DEFAULT_PREVIEW_PLAN = BUDGET_PREVIEW_SETTINGS[DEFAULT_BUDGET];
 
 const PHOTO_TIPS = [
-  "Bright, clear photo (daylight if possible).",
-  "Whole room from one corner, camera level.",
-  "Avoid filters + motion blur.",
+  "Use a bright photo if you can.",
+  "Stand back enough to show the whole room.",
+  "Skip filters so the preview has a clean starting point.",
 ];
 
-const MODE_OPTIONS: {
-  key: ModeKey;
-  title: string;
-  body: string;
-}[] = [
-  {
-    key: "reality_lock",
-    title: "Reality Lock™",
-    body: "Keeps the room closest to the original structure, layout, and perspective.",
+const STEP_COPY: Record<StepKey, { title: string; body: string }> = {
+  upload: {
+    title: "Pick your room",
+    body: "Choose the room type, upload one clear photo, and we will read the space from there.",
   },
-  {
-    key: "precision",
-    title: "Precision",
-    body: "Balanced redesigns that feel realistic while still giving the room a stronger upgrade.",
+  style: {
+    title: "Choose your vibe",
+    body: "Tap the look you want to test. CozyLogic keeps the room practical either way.",
   },
-  {
-    key: "creative",
-    title: "Creative",
-    body: "Pushes the transformation further for bolder visual changes and more dramatic inspiration.",
+  budget: {
+    title: "Choose your budget",
+    body: "Start with what you own, then add small upgrades only if they fit.",
   },
-];
-
-function getStrengthLabel(strength: number) {
-  if (strength <= 25) return "Very subtle";
-  if (strength <= 45) return "Subtle";
-  if (strength <= 65) return "Balanced";
-  if (strength <= 85) return "Bold";
-  return "Very bold";
-}
-
-function getModeHelper(mode: ModeKey, strength: number) {
-  const label = getStrengthLabel(strength);
-
-  if (mode === "reality_lock") {
-    return `${label} preservation — prioritize the existing room and keep changes tightly controlled.`;
-  }
-
-  if (mode === "creative") {
-    return `${label} transformation — allow stronger visual redesign while still respecting the room photo.`;
-  }
-
-  return `${label} redesign — realistic changes with a controlled, polished upgrade.`;
-}
+  review: {
+    title: "Preview the refresh",
+    body: "Give everything one last peek, then we will test the room refresh and send you to the result.",
+  },
+};
 
 export default function NewRedesignPage() {
   const router = useRouter();
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const draftRoomPromiseRef = useRef<Promise<string | null> | null>(null);
+  const generateSubmitRef = useRef(false);
 
   const [step, setStep] = useState<StepKey>("upload");
   const stepIndex = STEPS.findIndex((s) => s.key === step);
 
   const [roomType, setRoomType] = useState<(typeof ROOM_TYPES)[number]>("living_room");
-  const [goal, setGoal] = useState<(typeof GOALS)[number] | null>(null);
-  const [styleKey, setStyleKey] = useState<(typeof STYLES)[number] | null>(null);
-  const [budgetTier, setBudgetTier] = useState<(typeof BUDGET_TIERS)[number] | null>(null);
-  const [mode, setMode] = useState<ModeKey>(DEFAULT_MODE);
-  const [strength, setStrength] = useState<number>(DEFAULT_STRENGTH);
+  const [styleKey, setStyleKey] = useState<(typeof STYLES)[number] | null>(DEFAULT_STYLE);
+  const [budgetTier, setBudgetTier] = useState<(typeof BUDGET_TIERS)[number]>(DEFAULT_BUDGET);
 
   const [inputImagePath, setInputImagePath] = useState<string | null>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [generationJob, setGenerationJob] = useState<GenerationJob | null>(null);
+  const activeStepCopy = STEP_COPY[step];
+  const previewPlan = BUDGET_PREVIEW_SETTINGS[budgetTier];
 
   const canContinue =
     (step === "upload" && !!inputImagePath) ||
-    (step === "goal" && !!goal) ||
     (step === "style" && !!styleKey) ||
-    step === "mode" ||
-    (step === "budget" && !!budgetTier) ||
+    step === "budget" ||
     step === "review";
 
   async function requireUser() {
@@ -154,8 +142,8 @@ export default function NewRedesignPage() {
           goal: DEFAULT_GOAL,
           style_key: DEFAULT_STYLE,
           budget_tier: DEFAULT_BUDGET,
-          mode: DEFAULT_MODE,
-          strength: DEFAULT_STRENGTH,
+          mode: DEFAULT_PREVIEW_PLAN.mode,
+          strength: DEFAULT_PREVIEW_PLAN.strength,
           generation_status: null,
           generation_error: null,
         };
@@ -172,7 +160,7 @@ export default function NewRedesignPage() {
         setRoomId(data.id);
         return data.id as string;
       } catch (e: any) {
-        setError(e?.message ?? "Could not start redesign.");
+        setError(e?.message ?? "Could not start preview.");
         return null;
       } finally {
         draftRoomPromiseRef.current = null;
@@ -205,20 +193,36 @@ export default function NewRedesignPage() {
     setStep(prev);
   };
 
+  const resetFailedGeneration = () => {
+    generateSubmitRef.current = false;
+    draftRoomPromiseRef.current = null;
+    setGenerationJob(null);
+    setBusy(false);
+    setRoomId(null);
+    setError("That preview did not finish. You can try again now.");
+  };
+
   const onGenerate = async () => {
+    if (generateSubmitRef.current) return;
+
+    generateSubmitRef.current = true;
     setError(null);
 
     if (!inputImagePath) {
+      generateSubmitRef.current = false;
       setError("Please upload a photo first.");
       return;
     }
 
-    if (!goal || !styleKey || !budgetTier) {
-      setError("Please complete all steps before generating.");
+    if (!styleKey) {
+      generateSubmitRef.current = false;
+      setError("Please complete all steps before previewing.");
       return;
     }
 
     setBusy(true);
+    let shouldKeepWaiting = false;
+
     try {
       let id = roomId;
 
@@ -227,20 +231,26 @@ export default function NewRedesignPage() {
       }
 
       if (!id) {
-        setError("Failed to create room. Please try again.");
+        generateSubmitRef.current = false;
+        setError("Could not set up this room preview. Please try again.");
         return;
       }
+
+      setGenerationJob({
+        id,
+        statusUrl: `/api/generate/status?id=${encodeURIComponent(id)}`,
+        redirectTo: `/app/result/${id}`,
+      });
 
       await patchRoom(
         id,
         {
           room_type: roomType,
-          goal,
+          goal: DEFAULT_GOAL,
           style_key: styleKey,
           budget_tier: budgetTier,
-          mode,
-          strength,
-          status: "draft",
+          mode: previewPlan.mode,
+          strength: previewPlan.strength,
         },
         { silent: false }
       );
@@ -251,74 +261,117 @@ export default function NewRedesignPage() {
         body: JSON.stringify({ roomId: id }),
       });
 
-      if (res.status === 409) {
-        router.replace(`/app/result/${id}`);
-        router.refresh();
-        return;
-      }
-
       const json = await res.json().catch(() => ({} as any));
       if (!res.ok) {
-        setError((json as any)?.error ?? "Generation failed.");
+        setGenerationJob(null);
+        setError((json as any)?.error ?? "Preview failed.");
         return;
       }
 
-      router.replace(`/app/result/${id}`);
-      router.refresh();
+      const jobId = (json as any)?.generationId ?? id;
+      const roomResultId = (json as any)?.roomId ?? id;
+      setGenerationJob({
+        id: jobId,
+        statusUrl:
+          (json as any)?.statusUrl ?? `/api/generate/status?id=${encodeURIComponent(jobId)}`,
+        redirectTo: (json as any)?.resultUrl ?? `/app/result/${roomResultId}`,
+      });
+      shouldKeepWaiting = true;
     } catch (e: any) {
-      setError(e?.message ?? "Generation failed.");
+      setGenerationJob(null);
+      setError(e?.message ?? "Preview failed.");
     } finally {
-      setBusy(false);
+      if (!shouldKeepWaiting) {
+        generateSubmitRef.current = false;
+        setBusy(false);
+      }
     }
   };
 
   return (
-    <main className="min-h-screen bg-[#FAF9F7] text-[#1F1F1F]">
+    <main className="min-h-screen bg-[#F7EFE3] text-[#1F1F1F]">
+      {generationJob ? (
+        <GenerationOverlay
+          statusUrl={generationJob.statusUrl}
+          redirectTo={generationJob.redirectTo}
+          onRetry={resetFailedGeneration}
+          onDismiss={resetFailedGeneration}
+          retryLabel="Try this preview again"
+        />
+      ) : null}
+
       <div className="mx-auto w-full max-w-[900px] px-6 py-10">
         <div className="flex items-start justify-between gap-6">
           <div>
-            <div className="text-sm tracking-wide text-[#6A6A6A]">CozyLogic</div>
-            <h1 className="mt-2 text-3xl font-semibold leading-tight">New redesign</h1>
-            <p className="mt-2 text-[15px] leading-relaxed text-[#6A6A6A]">
-              Upload a photo, choose a style, dial the transformation, and generate.
+            <div className="inline-flex rotate-[-1deg] rounded-lg border border-[#DFC588] bg-[#F7E3A6] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#5F4A2E] shadow-sm">
+              CozyLogic room mission
+            </div>
+            <h1 className="mt-2 text-3xl font-semibold leading-tight">Preview your room refresh</h1>
+            <p className="mt-2 text-[15px] leading-relaxed text-[#6A5A49]">
+              Before you move all your furniture around, try the idea in CozyLogic first.
             </p>
           </div>
 
           <button
             type="button"
             onClick={() => router.push("/app")}
-            className="rounded-xl border border-[#EAEAEA] bg-white px-4 py-2 text-sm font-medium shadow-sm"
+            className="rounded-lg border border-[#D8C7AE] bg-[#FFFDF7] px-4 py-2 text-sm font-medium shadow-sm"
           >
             Back to Dashboard
           </button>
         </div>
 
-        <div className="mt-8 rounded-2xl border border-[#EAEAEA] bg-white p-6 shadow-sm">
+        <div className="relative mt-8 rounded-lg border border-[#D8C7AE] bg-[#FFF8EA] p-5 shadow-[0_22px_60px_rgba(68,52,37,0.12)] sm:p-6">
+          <span aria-hidden="true" className="absolute -top-3 left-8 h-7 w-28 rotate-[-4deg] bg-[#E8D8BC]/90 shadow-sm" />
           <Stepper steps={STEPS.map((s) => s.label)} activeIndex={stepIndex} />
+
+          <div className="mt-6 rounded-lg border border-[#D8C7AE] bg-[#FFFDF7] p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#7C6247]">
+              Step {stepIndex + 1} of {STEPS.length}
+            </div>
+            <h2 className="mt-2 text-2xl font-semibold leading-tight text-[#1F1F1F]">
+              {activeStepCopy.title}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-[#6A5A49]">{activeStepCopy.body}</p>
+          </div>
 
           <div className="mt-6">
             {step === "upload" && (
               <div className="space-y-5">
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div>
-                    <label className="text-sm text-[#6A6A6A]">Room type</label>
-                    <select
-                      className="mt-1 w-full rounded-xl border border-[#EAEAEA] bg-white px-4 py-3 text-[15px] outline-none focus:border-[#6F8373]"
-                      value={roomType}
-                      onChange={(e) => setRoomType(e.target.value as any)}
-                    >
-                      {ROOM_TYPES.map((rt) => (
-                        <option key={rt} value={rt}>
-                          {rt.replaceAll("_", " ")}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {ROOM_TYPES.map((rt) => {
+                    const selected = roomType === rt;
+                    return (
+                      <button
+                        key={rt}
+                        type="button"
+                        onClick={() => setRoomType(rt)}
+                        className={[
+                          "relative min-h-[128px] rounded-lg border p-4 text-left shadow-sm transition-transform",
+                          "hover:-translate-y-[1px]",
+                          selected
+                            ? "border-[#6F8373] bg-[#FFF8EA] ring-2 ring-[#6F8373]/20"
+                            : "border-[#D8C7AE] bg-[#FFFDF7]",
+                        ].join(" ")}
+                      >
+                        <span aria-hidden="true" className="absolute -top-2 left-7 h-5 w-20 rotate-[-3deg] bg-[#E8D8BC]/80 shadow-sm" />
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="text-base font-semibold">{ROOM_LABELS[rt]}</div>
+                          <div className="rounded-lg border border-[#D8C7AE] bg-[#F7EFE3] px-2 py-0.5 text-[11px] text-[#6A5A49]">
+                            {selected ? "Picked" : "Tap"}
+                          </div>
+                        </div>
+                        <div className="mt-3 text-sm leading-6 text-[#6A5A49]">
+                          {ROOM_HELPERS[rt]}
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
 
-                <div className="rounded-2xl border border-[#EAEAEA] bg-[#FAF9F7] p-4">
-                  <div className="text-sm font-medium">Photo tips</div>
-                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[#6A6A6A]">
+                <div className="rounded-lg border border-[#D8C7AE] bg-[#FFFDF7] p-4">
+                  <div className="text-sm font-medium">Tiny photo checklist</div>
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[#6A5A49]">
                     {PHOTO_TIPS.map((t) => (
                       <li key={t}>{t}</li>
                     ))}
@@ -329,38 +382,9 @@ export default function NewRedesignPage() {
               </div>
             )}
 
-            {step === "goal" && (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                {GOALS.map((g) => {
-                  const selected = goal === g;
-                  return (
-                    <button
-                      key={g}
-                      type="button"
-                      onClick={() => setGoal(g)}
-                      className={[
-                        "rounded-2xl border bg-white p-4 text-left shadow-sm transition-transform",
-                        "hover:-translate-y-[1px]",
-                        selected ? "border-[#6F8373]" : "border-[#EAEAEA]",
-                      ].join(" ")}
-                    >
-                      <div className="text-sm font-medium">{g.replaceAll("_", " ")}</div>
-                      <div className="mt-1 text-xs text-[#6A6A6A]">
-                        {g === "cozier" && "Warmer, softer, more inviting."}
-                        {g === "brighter" && "Lift the room with light tones and clarity."}
-                        {g === "modern" && "Cleaner lines, simplified visual noise."}
-                        {g === "bigger" && "Open up flow and reduce crowding."}
-                        {g === "refresh_budget" && "Highest-impact refresh on a budget."}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
             {step === "style" && (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {STYLES.map((s) => (
+                {STYLE_CHOICES.map((s) => (
                   <StyleTile
                     key={s}
                     styleKey={s}
@@ -371,109 +395,38 @@ export default function NewRedesignPage() {
               </div>
             )}
 
-            {step === "mode" && (
-              <div className="space-y-5">
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                  {MODE_OPTIONS.map((item) => {
-                    const selected = mode === item.key;
-                    return (
-                      <button
-                        key={item.key}
-                        type="button"
-                        onClick={() => setMode(item.key)}
-                        className={[
-                          "rounded-2xl border bg-white p-4 text-left shadow-sm transition-transform",
-                          "hover:-translate-y-[1px]",
-                          selected
-                            ? "border-[#6F8373] ring-1 ring-[#6F8373]/20"
-                            : "border-[#EAEAEA]",
-                        ].join(" ")}
-                      >
-                        <div className="text-sm font-semibold">{item.title}</div>
-                        <div className="mt-2 text-sm leading-6 text-[#6A6A6A]">{item.body}</div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <div className="rounded-2xl border border-[#EAEAEA] bg-[#FAF9F7] p-5">
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <div className="text-sm font-medium">Strength dial</div>
-                      <div className="mt-1 text-xs text-[#6A6A6A]">
-                        {getModeHelper(mode, strength)}
-                      </div>
-                    </div>
-                    <div className="rounded-full border border-[#EAEAEA] bg-white px-3 py-1 text-sm font-medium">
-                      {strength}
-                    </div>
-                  </div>
-
-                  <div className="mt-5">
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      step={1}
-                      value={strength}
-                      onChange={(e) => setStrength(Number(e.target.value))}
-                      className="w-full accent-[#6F8373]"
-                    />
-                    <div className="mt-2 flex items-center justify-between text-[11px] text-[#6A6A6A]">
-                      <span>Subtle</span>
-                      <span>Balanced</span>
-                      <span>Bold</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
             {step === "budget" && <BudgetSelect value={budgetTier} onChange={setBudgetTier} />}
 
             {step === "review" && (
               <div className="space-y-5">
-                <div className="rounded-2xl border border-[#EAEAEA] bg-[#FAF9F7] p-5">
+                <div className="relative rounded-lg border border-[#D8C7AE] bg-[#FFFDF7] p-5">
+                  <span aria-hidden="true" className="absolute -top-2 left-7 h-5 w-20 rotate-[3deg] bg-[#E8D8BC]/80 shadow-sm" />
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div>
-                      <div className="text-xs text-[#6A6A6A]">Room</div>
-                      <div className="text-sm font-medium">{roomType.replaceAll("_", " ")}</div>
+                      <div className="text-xs uppercase tracking-[0.16em] text-[#7C6247]">Room</div>
+                      <div className="text-sm font-medium">{ROOM_LABELS[roomType]}</div>
                     </div>
                     <div>
-                      <div className="text-xs text-[#6A6A6A]">Goal</div>
-                      <div className="text-sm font-medium">{goal?.replaceAll("_", " ")}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-[#6A6A6A]">Style</div>
-                      <div className="text-sm font-medium">{styleKey?.replaceAll("_", " ")}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-[#6A6A6A]">Budget</div>
-                      <div className="text-sm font-medium">{budgetTier?.replaceAll("_", " ")}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-[#6A6A6A]">Mode</div>
+                      <div className="text-xs uppercase tracking-[0.16em] text-[#7C6247]">Vibe</div>
                       <div className="text-sm font-medium">
-                        {MODE_OPTIONS.find((item) => item.key === mode)?.title}
+                        {styleKey ? STYLE_LABELS[styleKey] : ""}
                       </div>
                     </div>
                     <div>
-                      <div className="text-xs text-[#6A6A6A]">Strength</div>
+                      <div className="text-xs uppercase tracking-[0.16em] text-[#7C6247]">Budget</div>
                       <div className="text-sm font-medium">
-                        {strength} • {getStrengthLabel(strength)}
+                        {budgetTier ? BUDGET_LABELS[budgetTier] : ""}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs uppercase tracking-[0.16em] text-[#7C6247]">Refresh plan</div>
+                      <div className="text-sm font-medium">{previewPlan.planLabel}</div>
+                      <div className="mt-1 text-xs leading-5 text-[#6A5A49]">
+                        {previewPlan.planDescription}
                       </div>
                     </div>
                   </div>
                 </div>
-
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={onGenerate}
-                  className="w-full rounded-xl bg-[#6F8373] px-4 py-3 text-sm font-medium text-white shadow-sm disabled:opacity-60"
-                >
-                  {busy ? "Generating…" : "Generate redesign"}
-                </button>
               </div>
             )}
           </div>
@@ -488,8 +441,8 @@ export default function NewRedesignPage() {
             <button
               type="button"
               onClick={goBack}
-              disabled={busy || stepIndex === 0}
-              className="rounded-xl border border-[#EAEAEA] bg-white px-4 py-2 text-sm font-medium shadow-sm disabled:opacity-50"
+              disabled={busy || !!generationJob || stepIndex === 0}
+              className="min-h-[48px] rounded-lg border border-[#D8C7AE] bg-[#FFFDF7] px-5 py-3 text-sm font-medium shadow-sm disabled:opacity-50"
             >
               Back
             </button>
@@ -497,10 +450,10 @@ export default function NewRedesignPage() {
             <button
               type="button"
               onClick={step === "review" ? onGenerate : goNext}
-              disabled={busy || !canContinue}
-              className="rounded-xl bg-[#1F1F1F] px-4 py-2 text-sm font-medium text-white shadow-sm disabled:opacity-50"
+              disabled={busy || !!generationJob || !canContinue}
+              className="min-h-[48px] rounded-lg bg-[#1F1F1F] px-5 py-3 text-sm font-medium text-white shadow-sm disabled:opacity-50"
             >
-              {step === "review" ? (busy ? "Generating…" : "Generate") : "Continue"}
+              {step === "review" ? (busy ? "Starting preview…" : "Preview the refresh") : "Next step"}
             </button>
           </div>
         </div>
