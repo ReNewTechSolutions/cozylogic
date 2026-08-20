@@ -74,11 +74,11 @@ function getTransformationRules(mode: Mode, strength: number, rearrangeOnly: boo
   if (mode === "creative") {
     return [
       "TRANSFORMATION LEVEL",
-      "- Creative mode: allow a stronger visual shift while keeping the room believable.",
-      "- Bigger furniture, decor, and styling changes are allowed.",
-      "- The architecture should still remain intact, but the result can feel more editorial and aspirational.",
+      "- Creative mode: allow a visible style shift while keeping the room believable.",
+      "- Furniture, decor, and styling changes must remain practical for the real space.",
+      "- Keep the architecture, fixed elements, and camera viewpoint intact.",
       strength > 70
-        ? "- Push for a bold, high-impact transformation."
+        ? "- Use a confident style direction without forcing unnecessary replacements or movement."
         : "- Keep the transformation expressive but still practical.",
     ].join("\n");
   }
@@ -133,7 +133,7 @@ function getStyleDirection(style: string, styleKey: StyleKey) {
         `STYLE DIRECTION: ${style}`,
         "- Organic materials, relaxed styling, earthy warmth",
         "- Woven textures, soft curves, layered textiles",
-        "- Editorial but approachable",
+        "- Polished but approachable",
       ].join("\n");
 
     case "clean_traditional":
@@ -177,8 +177,9 @@ export function buildDesignPrompt(inputs: PromptInputs) {
     "- Prioritize realism, achievable styling, and a recognizable before/after relationship.",
     "",
     "REALITY LOCK RULES",
-    "- Preserve the real room structure whenever possible.",
+    "- Preserve the real room structure, windows, doors, and camera angle.",
     "- Do not invent new walls, windows, doors, or impossible architecture.",
+    "- If a TV is present, keep it on the same wall and in the same location and scale.",
     "- Keep furniture scale, walking paths, and placement believable for the room size.",
     "- Avoid surreal styling, luxury-overload, or magazine-only concepts that would feel fake in a normal home.",
     "",

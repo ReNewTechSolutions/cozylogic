@@ -160,7 +160,7 @@ function buildDemoPrompt(args: {
     args.mode === "reality_lock"
       ? "Preserve the real room very tightly. Keep walls, windows, doors, flooring, perspective, and camera angle as close to the original as possible."
       : args.mode === "creative"
-        ? "Allow a stronger transformation while still respecting the original room structure and camera angle."
+        ? "Allow visible style changes while preserving the original room structure, fixed elements, and camera angle."
         : "Create a realistic redesign with controlled, believable changes that still clearly matches the original room.";
 
   return [
@@ -172,11 +172,16 @@ function buildDemoPrompt(args: {
     `Budget meaning: ${friendlyLabel(BUDGET_PROMPT_MEANINGS, args.budgetTier)}.`,
     `Strength: ${args.strength}/100.`,
     modeInstruction,
+    "Return exactly one realistic AFTER image of this same room.",
+    "Do not return a collage, split screen, before-and-after composite, multiple views, text, labels, logos, or watermarks.",
     "Keep the image photorealistic.",
-    "Do not invent a different room.",
-    "Do not change the viewpoint.",
+    "Preserve the architecture, walls, windows, doors, flooring, built-ins, and room dimensions.",
+    "Keep the same camera angle, viewpoint, framing, lens perspective, and crop.",
+    "If a TV is present, keep the same TV on the same wall and in the same location, orientation, and scale.",
+    "Keep major furniture in place unless a small, realistic adjustment clearly improves function.",
+    "Do not force major movement or invent a different room.",
     "Do not turn this into a fantasy render.",
-    "Return a polished before-and-after style redesign of the same exact room.",
+    "Make only practical changes that fit the selected style and budget.",
   ].join(" ");
 }
 

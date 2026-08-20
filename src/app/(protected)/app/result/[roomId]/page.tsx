@@ -90,29 +90,31 @@ export default async function ResultPage({ params }: PageProps) {
   const status = room.status ?? "";
   const step = room.generation_status ?? "";
   const err = room.generation_error ?? "";
-  const friendlyErr = err.replaceAll("_", " ");
+  const isFailed =
+    status === "error" || status === "failed" || step === "error" || step === "failed";
+  const friendlyErr = err
+    ? err.replaceAll("_", " ")
+    : "Your original photo and choices are safe.";
   const roomLabel = ROOM_LABELS[room.room_type as keyof typeof ROOM_LABELS] ?? room.room_type;
   const styleLabel = STYLE_LABELS[room.style_key as keyof typeof STYLE_LABELS] ?? room.style_key;
   const budgetLabel =
     BUDGET_LABELS[room.budget_tier as keyof typeof BUDGET_LABELS] ?? room.budget_tier;
 
   const isWorking =
-    status === "queued" ||
-    status === "generating" ||
-    (step && step !== "done" && step !== "generated" && step !== "error");
-
-  // Expire after 30 minutes (same as signed URL TTL)
-  let isExpired = false;
-  if (gen?.created_at) {
-    const created = new Date(gen.created_at).getTime();
-    const now = Date.now();
-    const ttlMs = 30 * 60 * 1000;
-    isExpired = now - created > ttlMs;
-  }
+    !isFailed &&
+    (status === "queued" ||
+      status === "generating" ||
+      (step && step !== "done" && step !== "generated"));
 
   return (
     <main className="min-h-screen bg-[#F7EFE3] text-[#1F1F1F]">
-      {isWorking ? <GenerationOverlay roomId={room.id} /> : null}
+      {isWorking ? (
+        <GenerationOverlay
+          roomId={room.id}
+          retryHref="/app/new"
+          retryLabel="Try a fresh preview"
+        />
+      ) : null}
 
       <div className="mx-auto w-full max-w-[980px] px-6 py-10">
         <div className="flex items-start justify-between gap-6">
@@ -134,7 +136,7 @@ export default async function ResultPage({ params }: PageProps) {
           </a>
         </div>
 
-        {err ? (
+        {isFailed ? (
           <div className="mt-6 rounded-lg border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-800">
             <div className="font-semibold">We could not finish this preview.</div>
             <p className="mt-1 leading-6">
@@ -196,24 +198,8 @@ export default async function ResultPage({ params }: PageProps) {
               </div>
               <div className="relative aspect-[3/2] overflow-hidden rounded-lg bg-[#EDE2D2]">
                 {outputUrl ? (
-                  <>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={outputUrl}
-                      alt="After"
-                      className={`h-full w-full object-cover ${isExpired ? "blur-sm opacity-80" : ""}`}
-                    />
-                    {isExpired && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/30 backdrop-blur-sm">
-                        <a
-                          href="/login"
-                          className="rounded-lg bg-white px-4 py-2 text-sm font-medium shadow"
-                        >
-                          Unlock this preview
-                        </a>
-                      </div>
-                    )}
-                  </>
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={outputUrl} alt="After" className="h-full w-full object-cover" />
                 ) : isWorking ? (
                   <div className="grid h-full place-items-center p-6 text-center">
                     <div className="text-sm font-medium">Previewing…</div>
@@ -248,7 +234,7 @@ export default async function ResultPage({ params }: PageProps) {
           </div>
         </div>
 
-        {outputUrl && !isExpired ? (
+        {outputUrl ? (
           <ResultMissionBoard
             roomType={room.room_type}
             styleKey={room.style_key}
@@ -256,7 +242,7 @@ export default async function ResultPage({ params }: PageProps) {
           />
         ) : null}
 
-        {outputUrl && !isExpired ? (
+        {outputUrl ? (
           <ShopThisLook
             roomType={room.room_type}
             goal={room.goal}

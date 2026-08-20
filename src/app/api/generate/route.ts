@@ -193,6 +193,10 @@ function buildRearrangeOnlyPrompt(room: {
   return `
 You are an expert home stager. Create a realistic "AFTER" photo of the SAME room.
 
+OUTPUT CONTRACT:
+- Return exactly ONE realistic "AFTER" image of this same room.
+- Do not return a collage, split screen, before/after composite, multiple views, text, labels, logos, or watermarks.
+
 STRICT RULE: DO NOT REPLACE FURNITURE OR DECOR.
 - Keep the user's existing major furniture the SAME:
   sofa/sectional, chairs, coffee table, side tables, TV/console, bed frame/dresser if present.
@@ -205,8 +209,8 @@ ARCHITECTURE LOCK:
 - Curtains/blinds must remain EXACTLY the same (same open/closed state + same coverage).
 - Do NOT change the visible outdoors brightness/view framing.
 - Do NOT change floor material or built-ins.
-- No text, logos, watermarks.
 - Do NOT change lens/FOV or crop.
+- If a TV is present, keep the same TV on the same wall and in the same location, orientation, and scale.
 
 ALLOWED CHANGES:
 - You MAY move/rotate/reposition existing furniture to improve flow.
@@ -233,7 +237,11 @@ function buildRedesignPrompt(room: {
   const budgetMeaning = friendlyLabel(BUDGET_PROMPT_MEANINGS, room.budget_tier);
 
   return `
-You are an expert interior designer. Create a MAGAZINE-WORTHY "AFTER" photo.
+You are an expert interior designer. Create a realistic "AFTER" photo of the SAME room.
+
+OUTPUT CONTRACT:
+- Return exactly ONE realistic "AFTER" image of this same room.
+- Do not return a collage, split screen, before/after composite, multiple views, text, labels, logos, or watermarks.
 
 ARCHITECTURE LOCK:
 - SAME room, SAME camera angle, SAME framing.
@@ -241,11 +249,11 @@ ARCHITECTURE LOCK:
 - Curtains/blinds must remain EXACTLY the same (same open/closed state + same coverage).
 - Do NOT change the visible outdoors brightness/view framing.
 - Do NOT change floor material or built-ins.
-- No text, logos, watermarks.
 - Do NOT change lens/FOV or crop to hide areas.
+- If a TV is present, keep the same TV on the same wall and in the same location, orientation, and scale.
 
-TRANSFORMATION REQUIREMENT:
-This must look like a full redesign, not a filter. Clearly different furniture + decor.
+REALISTIC REFRESH:
+Make a controlled, practical improvement that remains unmistakably the same real room.
 Tidy and organize visible clutter during the same edit pass using believable baskets, trays, bins, or closed storage.
 Do not simply erase clutter into empty space.
 
@@ -255,20 +263,9 @@ Style: ${style}
 Budget: ${budget}
 Budget meaning: ${budgetMeaning}
 
-You may reposition furniture to create a new layout, but do not alter architecture.
-At least TWO major items must move position.
-
-You MUST change AT LEAST 8 of these (visibly):
-1) Replace main seating silhouette
-2) Replace coffee table shape/material
-3) Replace rug pattern/texture
-4) Add layered lighting (floor + table lamp) with warm glow
-5) Replace wall art scale/composition
-6) Change textiles (pillows/throws; keep curtain state identical)
-7) Introduce 2–3 decor accents
-8) Add one new secondary piece (accent chair/ottoman/side table)
-9) Update color palette (clearly different harmony)
-10) Improve layout flow (noticeable repositioning)
+Change only the furniture, lighting, textiles, color, and decor needed to express the requested style and budget.
+Keep major furniture in its original location unless a small, realistic adjustment clearly improves function.
+Do not force major movement, replace every item, or change the room beyond what the requested budget supports.
 
 STYLE LOCK (unmistakably ${style}):
 - Cohesive palette + material story
@@ -277,7 +274,7 @@ STYLE LOCK (unmistakably ${style}):
 ${kit ? `\n${kit}\n` : ""}
 
 PHOTOREALISM:
-- Real shadows, believable proportions, editorial real estate photo look.
+- Real shadows, believable proportions, and a natural interior-photo finish.
 `.trim();
 }
 

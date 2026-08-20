@@ -38,7 +38,8 @@ describe("route smoke checks", () => {
 
     assert.match(result, /export default async function ResultPage/);
     assert.match(result, /const \{ roomId \} = await params/);
-    assert.match(result, /\{isWorking \? <GenerationOverlay roomId=\{room\.id\} \/> : null\}/);
+    assert.match(result, /<GenerationOverlay/);
+    assert.match(result, /roomId=\{room\.id\}/);
     assert.match(result, /href="\/app"/);
   });
 
@@ -174,9 +175,68 @@ describe("route smoke checks", () => {
     assert.match(overlay, /This one got stuck/);
     assert.match(overlay, /friendlyGenerationError/);
     assert.match(result, /We could not finish this preview/);
+    assert.match(result, /retryHref="\/app\/new"/);
     assert.match(result, /href="\/app\/new"/);
     assert.match(demoResult, /We could not finish this free preview/);
+    assert.match(demoResult, /statusUrl=\{`\/api\/demo\/\$\{encodeURIComponent\(token\)\}\/status`\}/);
+    assert.match(demoResult, /retryHref="\/demo"/);
     assert.match(demoResult, /href="\/demo"/);
+  });
+
+  it("keeps generation realistic and preserves fixed room evidence", () => {
+    const route = read("src/app/api/generate/route.ts");
+    const demoRoute = read("src/app/api/demo/generate/route.ts");
+    const prompts = read("lib/cozylogic/prompts.ts");
+    const generationLanguage = `${route}\n${demoRoute}\n${prompts}`;
+
+    assert.doesNotMatch(generationLanguage, /MAGAZINE-WORTHY/i);
+    assert.doesNotMatch(generationLanguage, /full redesign/i);
+    assert.doesNotMatch(generationLanguage, /AT LEAST 8/i);
+    assert.doesNotMatch(generationLanguage, /At least TWO major items/i);
+    assert.doesNotMatch(generationLanguage, /stronger transformation/i);
+    assert.match(route, /Return exactly ONE realistic "AFTER" image/);
+    assert.match(demoRoute, /Return exactly one realistic AFTER image/);
+    assert.match(generationLanguage, /walls, windows, doors/);
+    assert.match(generationLanguage, /same camera angle/i);
+    assert.match(generationLanguage, /If a TV is present/);
+    assert.match(generationLanguage, /Do not force major movement/);
+  });
+
+  it("keeps signed uploads scoped to the authenticated user's path", () => {
+    const upload = read("components/UploadCard.tsx");
+    const route = read("src/app/api/images/signed-url/route.ts");
+
+    assert.doesNotMatch(upload, /auth\.getSession/);
+    assert.doesNotMatch(upload, /console\.(?:log|debug|info)/);
+    assert.match(route, /segments\[0\] === userId/);
+    assert.match(route, /isOwnedUploadPath\(path, user\.id\)/);
+    assert.match(route, /forbidden_path/);
+  });
+
+  it("keeps signed-in saved results available beyond a signed URL TTL", () => {
+    const result = read("src/app/(protected)/app/result/[roomId]/page.tsx");
+
+    assert.doesNotMatch(result, /isExpired/);
+    assert.doesNotMatch(result, /Unlock this preview/);
+    assert.doesNotMatch(result, /blur-sm opacity-80/);
+    assert.match(result, /\{outputUrl \? \(/);
+  });
+
+  it("includes synthetic QA fixtures for four representative room types", () => {
+    const fixtures = JSON.parse(read("tests/fixtures/room-qa.json"));
+
+    assert.deepEqual(
+      fixtures.map((fixture) => fixture.roomType),
+      ["bedroom", "living_room", "office", "small_space"]
+    );
+    for (const fixture of fixtures) {
+      assert.match(fixture.id, /^synthetic-/);
+      assert.equal(typeof fixture.scene, "string");
+      assert.ok(fixture.scene.length > 40);
+      assert.ok(fixture.preserve.includes("architecture"));
+      assert.ok(fixture.preserve.includes("windows"));
+      assert.ok(fixture.preserve.includes("camera_angle"));
+    }
   });
 
   it("keeps the editorial mission board UI surfaces present", () => {

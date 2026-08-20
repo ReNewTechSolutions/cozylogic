@@ -9,6 +9,7 @@ import {
   STORAGE_BUCKET_OUTPUTS,
   STYLE_LABELS,
 } from "@/lib/cozylogic/constants";
+import GenerationOverlay from "@/components/GenerationOverlay";
 import ResultMissionBoard from "@/components/ResultMissionBoard";
 import ShopThisLook from "@/components/ShopThisLook";
 
@@ -73,16 +74,24 @@ export default async function DemoResultPage({ params }: PageProps) {
 
   const inputUrl = await createSignedUrl(STORAGE_BUCKET_INPUTS, trial.input_image_path);
   const outputUrl = await createSignedUrl(STORAGE_BUCKET_OUTPUTS, trial.output_image_path);
+  const isFailed =
+    trial.status === "error" ||
+    trial.status === "failed" ||
+    trial.generation_status === "error" ||
+    trial.generation_status === "failed";
   const generationError = trial.generation_error
     ? String(trial.generation_error).replaceAll("_", " ")
-    : "";
+    : isFailed
+      ? "Your original photo and choices are safe."
+      : "";
 
   const isWorking =
-    trial.status === "draft" ||
-    trial.status === "queued" ||
-    trial.status === "generating" ||
-    trial.generation_status === "queued" ||
-    trial.generation_status === "generating";
+    !isFailed &&
+    (trial.status === "draft" ||
+      trial.status === "queued" ||
+      trial.status === "generating" ||
+      trial.generation_status === "queued" ||
+      trial.generation_status === "generating");
 
   const isExpired = trial.expires_at && new Date(trial.expires_at) < new Date();
   const roomLabel = ROOM_LABELS[trial.room_type as keyof typeof ROOM_LABELS] ?? trial.room_type;
@@ -92,6 +101,14 @@ export default async function DemoResultPage({ params }: PageProps) {
 
   return (
     <main className="min-h-screen bg-[#F7EFE3] text-[#1F1F1F]">
+      {isWorking ? (
+        <GenerationOverlay
+          statusUrl={`/api/demo/${encodeURIComponent(token)}/status`}
+          retryHref="/demo"
+          retryLabel="Try the demo again"
+        />
+      ) : null}
+
       <div className="mx-auto w-full max-w-[980px] px-6 py-10">
         <div className="flex items-start justify-between gap-6">
           <div>

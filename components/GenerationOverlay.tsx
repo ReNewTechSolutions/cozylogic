@@ -10,6 +10,7 @@ type Props = {
   redirectTo?: string;
   onRetry?: () => void;
   onDismiss?: () => void;
+  retryHref?: string;
   retryLabel?: string;
 };
 
@@ -52,6 +53,7 @@ export default function GenerationOverlay({
   redirectTo,
   onRetry,
   onDismiss,
+  retryHref,
   retryLabel = "Try again",
 }: Props) {
   const router = useRouter();
@@ -167,7 +169,11 @@ export default function GenerationOverlay({
 
   const handleRetry = () => {
     setVisible(false);
-    onRetry?.();
+    if (onRetry) {
+      onRetry();
+    } else if (retryHref) {
+      router.push(retryHref);
+    }
   };
 
   const handleDismiss = () => {
@@ -235,7 +241,7 @@ export default function GenerationOverlay({
 
         {hasError ? (
           <div className="mt-5 flex flex-col gap-3 sm:flex-row">
-            {onRetry ? (
+            {onRetry || retryHref ? (
               <button
                 type="button"
                 onClick={handleRetry}

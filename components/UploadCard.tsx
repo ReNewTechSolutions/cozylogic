@@ -41,15 +41,11 @@ export default function UploadCard({
       setPreviewBusy(true);
       try {
         const url = await getSignedUrl(supabase, STORAGE_BUCKET_INPUTS, value);
-        console.log("PREVIEW bucket", STORAGE_BUCKET_INPUTS);
-        console.log("PREVIEW path", value);
-        console.log("PREVIEW signedUrl", url);
-
         if (!cancelled) {
           setPreviewUrl(url);
         }
-      } catch (e) {
-        console.error("PREVIEW signed URL failed", e);
+      } catch {
+        // Leave the preview unavailable without exposing storage details in the browser console.
       } finally {
         if (!cancelled) {
           setPreviewBusy(false);
@@ -79,14 +75,10 @@ export default function UploadCard({
 
     setBusy(true);
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      console.log("UPLOAD session", sessionData.session);
-
       const {
         data: { user },
         error: userErr,
       } = await supabase.auth.getUser();
-      console.log("UPLOAD user", user, userErr);
 
       if (userErr) throw userErr;
       if (!user) {

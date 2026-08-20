@@ -1,0 +1,26 @@
+[
+  {
+    "id": "synthetic-bedroom",
+    "roomType": "bedroom",
+    "scene": "Rectangular bedroom photographed from the doorway, with one rear window, a bed centered on the left wall, a dresser, and a wall-mounted TV opposite the bed.",
+    "preserve": ["architecture", "windows", "tv", "camera_angle"]
+  },
+  {
+    "id": "synthetic-living-room",
+    "roomType": "living_room",
+    "scene": "Living room photographed from a corner, with two front windows, a sofa facing a TV and console on the right wall, and an open doorway behind the seating area.",
+    "preserve": ["architecture", "windows", "tv", "camera_angle"]
+  },
+  {
+    "id": "synthetic-office",
+    "roomType": "office",
+    "scene": "Compact home office photographed straight on, with a desk below the window, built-in shelves on the left, a monitor, and a clear doorway on the right.",
+    "preserve": ["architecture", "windows", "built_ins", "camera_angle"]
+  },
+  {
+    "id": "synthetic-small-space",
+    "roomType": "small_space",
+    "scene": "Small studio nook photographed from its entrance, with one window, a narrow walkway, a loveseat, a wall-mounted TV, and a fixed kitchenette edge in frame.",
+    "preserve": ["architecture", "windows", "tv", "camera_angle"]
+  }
+]
