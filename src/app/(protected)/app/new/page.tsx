@@ -10,6 +10,7 @@ import UploadCard from "@/components/UploadCard";
 import StyleTile from "@/components/StyleTile";
 import BudgetSelect from "@/components/BudgetSelect";
 import GenerationOverlay from "@/components/GenerationOverlay";
+import { readFriendlyApiError } from "@/lib/cozylogic/flowErrors";
 import {
   BUDGET_LABELS,
   BUDGET_PREVIEW_SETTINGS,
@@ -114,7 +115,7 @@ export default function NewRedesignPage() {
     const { error } = await supabase.from("rooms").update(patch).eq("id", id);
 
     if (error && !opts?.silent) {
-      throw error;
+      throw new Error("We could not save your room choices. Please try again.");
     }
   }
 
@@ -154,13 +155,16 @@ export default function NewRedesignPage() {
           .select("id")
           .single();
 
-        if (insertErr) throw insertErr;
-        if (!data?.id) throw new Error("room_insert_missing_id");
+        if (insertErr || !data?.id) throw new Error("room_create_failed");
 
         setRoomId(data.id);
         return data.id as string;
       } catch (e: any) {
-        setError(e?.message ?? "Could not start preview.");
+        setError(
+          e?.message === "room_create_failed"
+            ? "Your photo uploaded, but we could not create the room preview. Please try again."
+            : "We could not verify your sign-in or create the room preview. Please try again."
+        );
         return null;
       } finally {
         draftRoomPromiseRef.current = null;
@@ -236,12 +240,6 @@ export default function NewRedesignPage() {
         return;
       }
 
-      setGenerationJob({
-        id,
-        statusUrl: `/api/generate/status?id=${encodeURIComponent(id)}`,
-        redirectTo: `/app/result/${id}`,
-      });
-
       await patchRoom(
         id,
         {
@@ -258,13 +256,20 @@ export default function NewRedesignPage() {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ roomId: id }),
+        body: JSON.stringify({ roomId: id, requestId: crypto.randomUUID() }),
       });
 
       const json = await res.json().catch(() => ({} as any));
       if (!res.ok) {
+        draftRoomPromiseRef.current = null;
+        setRoomId(null);
         setGenerationJob(null);
-        setError((json as any)?.error ?? "Preview failed.");
+        setError(
+          readFriendlyApiError(
+            json,
+            "Your photo uploaded, but we could not start the generation job. Please try again."
+          )
+        );
         return;
       }
 
@@ -278,8 +283,10 @@ export default function NewRedesignPage() {
       });
       shouldKeepWaiting = true;
     } catch (e: any) {
+      draftRoomPromiseRef.current = null;
+      setRoomId(null);
       setGenerationJob(null);
-      setError(e?.message ?? "Preview failed.");
+      setError(e?.message ?? "We could not start the room preview. Please try again.");
     } finally {
       if (!shouldKeepWaiting) {
         generateSubmitRef.current = false;

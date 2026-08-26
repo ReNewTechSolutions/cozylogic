@@ -38,7 +38,7 @@ export function getConfiguredImageQuality(defaultQuality: ImageQuality = "low"):
   return defaultQuality;
 }
 
-export function getConfiguredImageSize(defaultSize: ImageSize = "1024x1024"): ImageSize {
+export function getConfiguredImageSize(defaultSize: ImageSize = "auto"): ImageSize {
   const size = cleanEnv(process.env.COZYLOGIC_IMAGE_SIZE);
   if (!size) return defaultSize;
   if (IMAGE_SIZES.has(size)) return size as ImageSize;

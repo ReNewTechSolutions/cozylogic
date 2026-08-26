@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { FLOW_ERROR_MESSAGES } from "@/lib/cozylogic/flowErrors";
 
 type Props = {
   roomId?: string;
@@ -40,11 +41,14 @@ function friendlyGenerationError(message?: string | null) {
   }
 
   const cleaned = message.replaceAll("_", " ");
+  if (FLOW_ERROR_MESSAGES[message]) {
+    return FLOW_ERROR_MESSAGES[message];
+  }
   if (cleaned.toLowerCase().includes("missing openai key")) {
-    return "The image service is not configured yet. Add the server key, then try again.";
+    return "The image service is not configured right now. Please try again later.";
   }
 
-  return `We could not finish this preview. ${cleaned}`;
+  return "We could not finish this preview. Your original photo and choices are safe.";
 }
 
 export default function GenerationOverlay({

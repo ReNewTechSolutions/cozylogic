@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   BUDGET_PREVIEW_SETTINGS,
   BUDGET_TIERS,
@@ -10,20 +10,33 @@ import {
   ROOM_TYPES,
   STYLE_CHOICES,
   STYLES,
+  STORAGE_BUCKET_INPUTS,
 } from "@/lib/cozylogic/constants";
 import BudgetSelect from "@/components/BudgetSelect";
 import GenerationOverlay from "@/components/GenerationOverlay";
 import StyleTile from "@/components/StyleTile";
+import { readFriendlyApiError } from "@/lib/cozylogic/flowErrors";
+import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
+import { validateImageFileMetadata } from "@/lib/cozylogic/uploads";
 
 type DemoGenerationJob = {
   statusUrl?: string;
   redirectTo?: string;
 };
 
+type PreparedUpload = {
+  requestId: string;
+  uploadId: string;
+  path: string;
+  token: string;
+  sessionToken: string;
+};
+
 const DEFAULT_GOAL = "refresh_budget" as (typeof GOALS)[number];
 
 export default function DemoPage() {
   const submitRef = useRef(false);
+  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
 
   const [file, setFile] = useState<File | null>(null);
   const [roomType, setRoomType] = useState<(typeof ROOM_TYPES)[number]>("living_room");
@@ -41,6 +54,45 @@ export default function DemoPage() {
     setError("That free preview did not finish. You can try again or tweak one choice.");
   };
 
+  const onFileChange = (nextFile: File | null) => {
+    setError(null);
+    if (!nextFile) {
+      setFile(null);
+      return;
+    }
+
+    const validation = validateImageFileMetadata(nextFile);
+    if (validation.ok === false) {
+      setFile(null);
+      setError(validation.message);
+      return;
+    }
+
+    setFile(nextFile);
+  };
+
+  async function reportUpload(
+    upload: PreparedUpload,
+    status: "started" | "succeeded" | "failed",
+    errorCode?: string
+  ) {
+    try {
+      await fetch("/api/demo/upload", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requestId: upload.requestId,
+          uploadId: upload.uploadId,
+          sessionToken: upload.sessionToken,
+          status,
+          errorCode,
+        }),
+      });
+    } catch {
+      // Upload instrumentation is best-effort and must not block a valid user upload.
+    }
+  }
+
   const onSubmit = async () => {
     if (submitRef.current) return;
 
@@ -53,35 +105,93 @@ export default function DemoPage() {
       return;
     }
 
+    const validation = validateImageFileMetadata(file);
+    if (validation.ok === false) {
+      submitRef.current = false;
+      setError(validation.message);
+      return;
+    }
+
     setBusy(true);
-    setGenerationJob({});
     let shouldKeepWaiting = false;
 
     try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("roomType", roomType);
-      form.append("goal", DEFAULT_GOAL);
-      form.append("styleKey", styleKey);
-      form.append("budgetTier", budgetTier);
-      form.append("mode", previewPlan.mode);
-      form.append("strength", String(previewPlan.strength));
+      const requestId = crypto.randomUUID();
+      const prepareRes = await fetch("/api/demo/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requestId,
+          fileName: file.name,
+          fileType: validation.mimeType,
+          fileSize: file.size,
+        }),
+      });
+      const prepareJson = await prepareRes.json().catch(() => ({} as any));
+      if (!prepareRes.ok) {
+        throw new Error(
+          readFriendlyApiError(
+            prepareJson,
+            "We could not prepare the photo upload. Please try again."
+          )
+        );
+      }
+
+      const upload: PreparedUpload = {
+        requestId: prepareJson.requestId,
+        uploadId: prepareJson.uploadId,
+        path: prepareJson.path,
+        token: prepareJson.token,
+        sessionToken: prepareJson.sessionToken,
+      };
+      if (!upload.uploadId || !upload.path || !upload.token || !upload.sessionToken) {
+        throw new Error("The upload setup was incomplete. Please choose the photo again.");
+      }
+
+      await reportUpload(upload, "started");
+      const { error: uploadError } = await supabase.storage
+        .from(STORAGE_BUCKET_INPUTS)
+        .uploadToSignedUrl(upload.path, upload.token, file, {
+          contentType: validation.mimeType,
+          upsert: false,
+        });
+      if (uploadError) {
+        await reportUpload(upload, "failed", uploadError.name || "storage_upload_failed");
+        throw new Error("The photo upload did not finish. Check your connection and try again.");
+      }
+      await reportUpload(upload, "succeeded");
 
       const res = await fetch("/api/demo/generate", {
         method: "POST",
-        body: form,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requestId: upload.requestId,
+          uploadId: upload.uploadId,
+          sessionToken: upload.sessionToken,
+          roomType,
+          goal: DEFAULT_GOAL,
+          styleKey,
+          budgetTier,
+          mode: previewPlan.mode,
+          strength: previewPlan.strength,
+        }),
       });
 
       const json = await res.json().catch(() => ({} as any));
 
       if (!res.ok) {
-        throw new Error(json?.error || "Failed to start preview.");
+        throw new Error(
+          readFriendlyApiError(
+            json,
+            "Your photo uploaded, but we could not start the generation job. Please try again."
+          )
+        );
       }
 
       const token = json.token;
 
       if (!token) {
-        throw new Error("Missing demo token.");
+        throw new Error("The preview job response was incomplete. Please try again.");
       }
 
       setGenerationJob({
@@ -91,7 +201,7 @@ export default function DemoPage() {
       shouldKeepWaiting = true;
     } catch (e: any) {
       setGenerationJob(null);
-      setError(e?.message ?? "Failed to start preview.");
+      setError(e?.message ?? "We could not start the room preview. Please try again.");
     } finally {
       if (!shouldKeepWaiting) {
         submitRef.current = false;
@@ -133,12 +243,12 @@ export default function DemoPage() {
               <span aria-hidden="true" className="absolute -top-2 left-7 h-5 w-20 rotate-[3deg] bg-[#E8D8BC]/80 shadow-sm" />
               <span className="text-base font-semibold text-[#1F1F1F]">Drop in the room you want to test</span>
               <span className="mt-1 block text-sm leading-6 text-[#6A5A49]">
-                One clear JPG, PNG, or WebP is perfect. A full-room photo works best.
+                One clear JPG, PNG, or WebP up to 10 MB is perfect. Export HEIC/HEIF photos as JPG first.
               </span>
               <input
                 type="file"
-                accept="image/jpeg,image/png,image/webp"
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif"
+                onChange={(e) => onFileChange(e.target.files?.[0] ?? null)}
                 className="mt-4 block w-full rounded-lg border border-[#D8C7AE] bg-[#FFFDF7] px-4 py-3 text-sm"
               />
             </label>

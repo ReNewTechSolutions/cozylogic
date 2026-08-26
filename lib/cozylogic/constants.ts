@@ -196,8 +196,9 @@ export const BUDGET_METADATA: Record<
   rearrange_only: {
     enumValue: "rearrange_only",
     displayLabel: "Free Fix — Use what I already own",
-    shortDescription: "Start here: rearrange, tidy, restyle, and make the room feel intentional.",
-    promptMeaning: "No purchases. Use existing furniture and decor; focus on rearranging, decluttering, organizing, and restyling.",
+    shortDescription: "Start here: preserve every major object and only rearrange or tidy what is already visible.",
+    promptMeaning:
+      "Strict inventory preservation. Add nothing, replace nothing, and keep every major visible object—including unusual functional items—visible in the after image.",
     cap: 0,
     active: true,
   },
@@ -273,7 +274,7 @@ export const BUDGET_PREVIEW_SETTINGS: Record<
     mode: "reality_lock",
     strength: 25,
     planLabel: "Free Fix first",
-    planDescription: "Keep the preview close to your room and focus on moving, tidying, and restyling what you own.",
+    planDescription: "Keep every major visible object and only rearrange, space, straighten, or tidy what you already own.",
   },
   under_500: {
     mode: "precision",

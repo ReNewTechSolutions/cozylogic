@@ -9,6 +9,7 @@ import {
   ROOM_TYPES,
   STYLES,
 } from "@/lib/cozylogic/constants";
+import { STRICT_INVENTORY_PRESERVATION_RULES } from "@/lib/cozylogic/inventoryPrompt";
 
 type RoomType = (typeof ROOM_TYPES)[number];
 type GoalKey = (typeof GOALS)[number];
@@ -48,7 +49,11 @@ function modeLabel(mode: Mode) {
 }
 
 function getTransformationRules(mode: Mode, strength: number, rearrangeOnly: boolean) {
-  if (rearrangeOnly || strength <= 30) {
+  if (rearrangeOnly) {
+    return ["TRANSFORMATION LEVEL", STRICT_INVENTORY_PRESERVATION_RULES].join("\n");
+  }
+
+  if (strength <= 30) {
     return [
       "TRANSFORMATION LEVEL",
       "- Rearrange / stage only.",
@@ -193,10 +198,10 @@ export function buildDesignPrompt(inputs: PromptInputs) {
     "",
     "SHOPPING + AFFILIATE READINESS",
     rearrangeOnly
-      ? "- Do not recommend purchases. Focus on rearranging, tidying, styling, and organization only."
+      ? "- Do not recommend purchases or new objects. Focus only on rearranging and presenting the exact visible inventory more neatly."
       : "- Recommend realistic item categories that could later be linked to commerce or affiliate products.",
     rearrangeOnly
-      ? "- Organizer suggestions are allowed only if absolutely necessary and should be minimal."
+      ? "- Do not suggest organizers, baskets, bins, trays, decor, or storage unless the exact item is already visible in the input."
       : "- Prefer item types that are easy to source online (Amazon-friendly categories are fine), but do not mention brand names unless explicitly asked.",
     "- Include size-aware, finish-aware suggestions so recommendations feel easy to shop.",
     "",

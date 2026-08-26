@@ -62,11 +62,19 @@ describe("route smoke checks", () => {
   it("keeps demo generation idempotent and waiting on status", () => {
     const page = read("src/app/demo/page.tsx");
     const route = read("src/app/api/demo/generate/route.ts");
+    const uploadRoute = read("src/app/api/demo/upload/route.ts");
 
     assert.match(page, /GenerationOverlay/);
     assert.match(page, /\/api\/demo\/\$\{encodeURIComponent\(token\)\}\/status/);
+    assert.match(page, /uploadToSignedUrl/);
+    assert.match(page, /if \(submitRef\.current\) return/);
     assert.match(route, /buildDemoIdempotencyKey/);
     assert.match(route, /\.eq\("trial_token", idempotencyKey\)/);
+    assert.match(route, /verifyDemoUploadSession/);
+    assert.match(route, /\.in\("status", \["failed", "error"\]\)/);
+    assert.match(route, /retried/);
+    assert.match(uploadRoute, /createSignedUploadUrl/);
+    assert.match(uploadRoute, /guest_session_created/);
     assert.match(route, /getConfiguredImageModel\(\)/);
   });
 
@@ -136,20 +144,22 @@ describe("route smoke checks", () => {
     const demoRoute = read("src/app/api/demo/generate/route.ts");
 
     assert.match(envExample, /COZYLOGIC_IMAGE_QUALITY=low/);
-    assert.match(envExample, /COZYLOGIC_IMAGE_SIZE=1024x1024/);
+    assert.match(envExample, /COZYLOGIC_IMAGE_SIZE=auto/);
     assert.match(config, /getConfiguredImageQuality/);
     assert.match(config, /getConfiguredImageSize/);
-    assert.match(config, /getConfiguredImageModelFallback/);
     assert.match(route, /getConfiguredImageQuality\(planState\.plan === "pro" \? "medium" : "low"\)/);
-    assert.match(route, /getConfiguredImageSize\("1024x1024"\)/);
+    assert.match(route, /getConfiguredImageSize\("auto"\)/);
     assert.match(route, /passCount: 1/);
+    assert.match(route, /maxRetries: 0/);
     assert.match(route, /OpenAI image call started/);
     assert.match(route, /Supabase upload started/);
     assert.doesNotMatch(route, /tidyBytes/);
     assert.doesNotMatch(route, /openai\.chat\.completions\.create/);
+    assert.doesNotMatch(route, /fallbackModel/);
     assert.match(demoRoute, /getConfiguredImageQuality\("low"\)/);
-    assert.match(demoRoute, /getConfiguredImageSize\("1024x1024"\)/);
+    assert.match(demoRoute, /getConfiguredImageSize\("auto"\)/);
     assert.match(demoRoute, /formData\.append\("quality", args\.quality\)/);
+    assert.doesNotMatch(demoRoute, /fallbackModel/);
   });
 
   it("protects generation UX while waiting and recovers from failed jobs", () => {
@@ -187,7 +197,8 @@ describe("route smoke checks", () => {
     const route = read("src/app/api/generate/route.ts");
     const demoRoute = read("src/app/api/demo/generate/route.ts");
     const prompts = read("lib/cozylogic/prompts.ts");
-    const generationLanguage = `${route}\n${demoRoute}\n${prompts}`;
+    const inventory = read("lib/cozylogic/inventoryPrompt.ts");
+    const generationLanguage = `${route}\n${demoRoute}\n${prompts}\n${inventory}`;
 
     assert.doesNotMatch(generationLanguage, /MAGAZINE-WORTHY/i);
     assert.doesNotMatch(generationLanguage, /full redesign/i);
@@ -200,17 +211,54 @@ describe("route smoke checks", () => {
     assert.match(generationLanguage, /same camera angle/i);
     assert.match(generationLanguage, /If a TV is present/);
     assert.match(generationLanguage, /Do not force major movement/);
+    assert.match(inventory, /exercise or gym equipment/);
+    assert.match(inventory, /walkers and mobility aids/);
+    assert.match(inventory, /pet furniture/);
+    assert.match(inventory, /Do NOT add any new furniture/);
+    assert.match(inventory, /Do NOT remove, hide, crop out/);
+    assert.match(inventory, /Do NOT add decor unless that exact decor is already visible/);
+    assert.match(route, /STRICT_INVENTORY_PRESERVATION_RULES/);
+    assert.match(demoRoute, /STRICT_INVENTORY_PRESERVATION_RULES/);
   });
 
   it("keeps signed uploads scoped to the authenticated user's path", () => {
     const upload = read("components/UploadCard.tsx");
     const route = read("src/app/api/images/signed-url/route.ts");
+    const statusRoute = read("src/app/api/images/upload-status/route.ts");
 
     assert.doesNotMatch(upload, /auth\.getSession/);
     assert.doesNotMatch(upload, /console\.(?:log|debug|info)/);
-    assert.match(route, /segments\[0\] === userId/);
+    assert.match(route, /validateImageFileMetadata/);
     assert.match(route, /isOwnedUploadPath\(path, user\.id\)/);
     assert.match(route, /forbidden_path/);
+    assert.match(upload, /uploadToSignedUrl/);
+    assert.match(statusRoute, /upload_start/);
+    assert.match(statusRoute, /upload_end/);
+  });
+
+  it("reports friendly pre-generation failures and structured stages", () => {
+    const demoPage = read("src/app/demo/page.tsx");
+    const newPage = read("src/app/(protected)/app/new/page.tsx");
+    const demoRoute = read("src/app/api/demo/generate/route.ts");
+    const generateRoute = read("src/app/api/generate/route.ts");
+    const uploadRoute = read("src/app/api/demo/upload/route.ts");
+    const logger = read("lib/cozylogic/serverLog.ts");
+
+    assert.match(demoPage, /if \(uploadError\)/);
+    assert.match(demoPage, /storage_upload_failed/);
+    assert.match(newPage, /generation job/);
+    assert.match(newPage, /if \(!res\.ok\) \{[\s\S]*setRoomId\(null\)/);
+    assert.match(demoRoute, /generation_job_creation_failed/);
+    assert.match(generateRoute, /generation_job_creation_failed/);
+    assert.match(demoRoute, /generation job creation started/);
+    assert.match(generateRoute, /generation job creation started/);
+    assert.match(demoRoute, /OpenAI image call started/);
+    assert.match(generateRoute, /OpenAI image call started/);
+    assert.match(uploadRoute, /upload_start/);
+    assert.match(uploadRoute, /upload_end/);
+    assert.match(logger, /SENSITIVE_FIELD/);
+    assert.match(logger, /final_failure/);
+    assert.doesNotMatch(demoPage, /setGenerationJob\(\{\}\)/);
   });
 
   it("keeps signed-in saved results available beyond a signed URL TTL", () => {

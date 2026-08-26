@@ -4,18 +4,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 import { STORAGE_BUCKET_INPUTS } from "@/lib/cozylogic/constants";
+import { readFriendlyApiError } from "@/lib/cozylogic/flowErrors";
 import { getSignedUrl } from "@/lib/cozylogic/images";
-
-function extFromName(name: string) {
-  const parts = name.split(".");
-  return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : "jpg";
-}
-
-function safeExt(ext: string) {
-  if (ext === "png") return "png";
-  if (ext === "webp") return "webp";
-  return "jpg";
-}
+import { validateImageFileMetadata } from "@/lib/cozylogic/uploads";
 
 export default function UploadCard({
   value,
@@ -59,70 +50,106 @@ export default function UploadCard({
     };
   }, [supabase, value]);
 
+  async function reportUploadStatus(args: {
+    requestId: string;
+    path: string;
+    status: "started" | "succeeded" | "failed";
+    errorCode?: string;
+  }) {
+    try {
+      await fetch("/api/images/upload-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(args),
+      });
+    } catch {
+      // Upload instrumentation is best-effort and must not block a valid user upload.
+    }
+  }
+
   const onPick = async (file: File | null) => {
     setErr(null);
     if (!file) return;
 
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
-      setErr("Please upload a JPG, PNG, or WebP image.");
-      return;
-    }
-
-    if (file.size > 10 * 1024 * 1024) {
-      setErr("Max file size is 10MB.");
+    const validation = validateImageFileMetadata(file);
+    if (validation.ok === false) {
+      setErr(validation.message);
       return;
     }
 
     setBusy(true);
+    const requestId = crypto.randomUUID();
+    let path = "";
+    let uploadFailureReported = false;
     try {
       const {
         data: { user },
         error: userErr,
       } = await supabase.auth.getUser();
 
-      if (userErr) throw userErr;
+      if (userErr) throw new Error("Your sign-in could not be verified. Sign in again and retry.");
       if (!user) {
         setErr("Please sign in again.");
         return;
       }
 
-      const ext = safeExt(extFromName(file.name));
-      const path = `${user.id}/${crypto.randomUUID()}.${ext}`;
+      path = `${user.id}/${crypto.randomUUID()}.${validation.extension}`;
 
       const signedRes = await fetch("/api/images/signed-url", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ path }),
+        body: JSON.stringify({
+          requestId,
+          path,
+          fileName: file.name,
+          fileType: validation.mimeType,
+          fileSize: file.size,
+        }),
       });
 
       const signedJson = await signedRes.json().catch(() => ({} as any));
 
       if (!signedRes.ok) {
-        throw new Error(signedJson?.error ?? "Could not create upload URL.");
+        throw new Error(
+          readFriendlyApiError(signedJson, "We could not prepare the photo upload. Please try again.")
+        );
       }
 
       const token = signedJson?.token as string | undefined;
 
       if (!token) {
-        throw new Error("Upload URL response was incomplete.");
+        throw new Error("The upload setup was incomplete. Please choose the photo again.");
       }
+
+      await reportUploadStatus({ requestId, path, status: "started" });
 
       const { error: uploadErr } = await supabase.storage
         .from(STORAGE_BUCKET_INPUTS)
         .uploadToSignedUrl(path, token, file, {
-          contentType: file.type || "image/jpeg",
+          contentType: validation.mimeType,
           upsert: false,
         });
 
       if (uploadErr) {
-        throw uploadErr;
+        uploadFailureReported = true;
+        await reportUploadStatus({
+          requestId,
+          path,
+          status: "failed",
+          errorCode: uploadErr.name || "storage_upload_failed",
+        });
+        throw new Error("The photo upload did not finish. Check your connection and try again.");
       }
 
+      await reportUploadStatus({ requestId, path, status: "succeeded" });
       onChange(path);
     } catch (e: any) {
-      setErr(e?.message ?? "Upload failed.");
+      if (path && !uploadFailureReported) {
+        await reportUploadStatus({ requestId, path, status: "failed", errorCode: "upload_failed" });
+      }
+      setErr(e?.message ?? "The photo upload did not finish. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -134,7 +161,7 @@ export default function UploadCard({
         <div>
           <div className="text-sm font-medium">Room photo</div>
           <div className="mt-1 text-xs text-[#6A6A6A]">
-            Upload a clear photo of your room (JPG/PNG/WebP, max 10MB).
+            Upload a clear photo of your room (JPG/PNG/WebP, max 10 MB). HEIC/HEIF needs to be exported as JPG first.
           </div>
         </div>
 
@@ -153,7 +180,7 @@ export default function UploadCard({
         <label className="block">
           <input
             type="file"
-            accept="image/jpeg,image/png,image/webp"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif"
             className="hidden"
             disabled={busy}
             onChange={(e) => onPick(e.target.files?.[0] ?? null)}

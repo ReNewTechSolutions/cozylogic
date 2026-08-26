@@ -1,7 +1,6 @@
 // src/app/api/demo/generate/route.ts
 import { createHash, randomUUID } from "crypto";
 import { after, NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import {
   BUDGET_LABELS,
   BUDGET_PROMPT_MEANINGS,
@@ -15,14 +14,28 @@ import {
   STYLE_LABELS,
   STYLES,
 } from "@/lib/cozylogic/constants";
+import { verifyDemoUploadSession } from "@/lib/cozylogic/demoUploadSession";
+import { flowErrorBody } from "@/lib/cozylogic/flowErrors";
 import {
   getConfiguredImageModel,
-  getConfiguredImageModelFallback,
   getConfiguredImageQuality,
   getConfiguredImageSize,
   type ImageQuality,
   type ImageSize,
 } from "@/lib/cozylogic/generationConfig";
+import { STRICT_INVENTORY_PRESERVATION_RULES } from "@/lib/cozylogic/inventoryPrompt";
+import {
+  getRequestId,
+  logServerEvent,
+  logServerFailure,
+  safeErrorDetails,
+} from "@/lib/cozylogic/serverLog";
+import { getSupabaseAdminClient } from "@/lib/supabase/admin";
+import {
+  hasMatchingImageSignature,
+  MAX_IMAGE_UPLOAD_BYTES,
+  validateImageFileMetadata,
+} from "@/lib/cozylogic/uploads";
 
 type RoomType = (typeof ROOM_TYPES)[number];
 type GoalKey = (typeof GOALS)[number];
@@ -36,7 +49,7 @@ function logDemoGenerationTiming(
   startedAt: number,
   details: Record<string, unknown> = {}
 ) {
-  console.info(`[CozyLogic demo-generate] ${event}`, {
+  logServerEvent("demo-generate", event, {
     elapsedMs: Date.now() - startedAt,
     ...details,
   });
@@ -78,13 +91,6 @@ function friendlyLabel(labels: Partial<Record<string, string>>, value: string) {
   return labels[value] ?? value.replaceAll("_", " ");
 }
 
-function safeExt(file: File) {
-  const type = file.type.toLowerCase();
-  if (type.includes("png")) return "png";
-  if (type.includes("webp")) return "webp";
-  return "jpg";
-}
-
 function bufferToBlob(input: Buffer, mime: string, filename: string) {
   const ab = new ArrayBuffer(input.byteLength);
   new Uint8Array(ab).set(input);
@@ -94,7 +100,7 @@ function bufferToBlob(input: Buffer, mime: string, filename: string) {
 }
 
 function buildDemoIdempotencyKey(args: {
-  inputBytes: Buffer;
+  uploadId: string;
   roomType: RoomType;
   goal: GoalKey;
   styleKey: StyleKey;
@@ -102,13 +108,11 @@ function buildDemoIdempotencyKey(args: {
   mode: ModeKey;
   strength: number;
 }) {
-  const fileHash = createHash("sha256").update(args.inputBytes).digest("hex");
-
   return createHash("sha256")
     .update(
       [
         "guest",
-        fileHash,
+        args.uploadId,
         args.roomType,
         args.goal,
         args.styleKey,
@@ -120,32 +124,21 @@ function buildDemoIdempotencyKey(args: {
     .digest("hex");
 }
 
-function getTrialResponse(trial: { id: string; trial_token: string }, reused = false) {
+function getTrialResponse(
+  trial: { id: string; trial_token: string },
+  reused = false,
+  retried = false
+) {
   return {
     ok: true,
     token: trial.trial_token,
     trialId: trial.id,
     generationId: trial.id,
     reused,
+    retried,
     statusUrl: `/api/demo/${encodeURIComponent(trial.trial_token)}/status`,
     resultUrl: `/demo/result/${trial.trial_token}`,
   };
-}
-
-function getAdminClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-  const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
-
-  if (!url || !serviceRole) {
-    throw new Error("Missing Supabase server environment variables.");
-  }
-
-  return createClient(url, serviceRole, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  });
 }
 
 function buildDemoPrompt(args: {
@@ -162,6 +155,8 @@ function buildDemoPrompt(args: {
       : args.mode === "creative"
         ? "Allow visible style changes while preserving the original room structure, fixed elements, and camera angle."
         : "Create a realistic redesign with controlled, believable changes that still clearly matches the original room.";
+  const strictInventoryRules =
+    args.budgetTier === "rearrange_only" ? STRICT_INVENTORY_PRESERVATION_RULES : "";
 
   return [
     "You are redesigning a real interior photo.",
@@ -172,13 +167,16 @@ function buildDemoPrompt(args: {
     `Budget meaning: ${friendlyLabel(BUDGET_PROMPT_MEANINGS, args.budgetTier)}.`,
     `Strength: ${args.strength}/100.`,
     modeInstruction,
+    strictInventoryRules,
     "Return exactly one realistic AFTER image of this same room.",
     "Do not return a collage, split screen, before-and-after composite, multiple views, text, labels, logos, or watermarks.",
     "Keep the image photorealistic.",
     "Preserve the architecture, walls, windows, doors, flooring, built-ins, and room dimensions.",
     "Keep the same camera angle, viewpoint, framing, lens perspective, and crop.",
     "If a TV is present, keep the same TV on the same wall and in the same location, orientation, and scale.",
-    "Keep major furniture in place unless a small, realistic adjustment clearly improves function.",
+    args.budgetTier === "rearrange_only"
+      ? "Do not add, replace, remove, hide, or crop out any major visible object."
+      : "Keep major furniture in place unless a small, realistic adjustment clearly improves function.",
     "Do not force major movement or invent a different room.",
     "Do not turn this into a fantasy render.",
     "Make only practical changes that fit the selected style and budget.",
@@ -216,13 +214,13 @@ async function requestImageEdit(args: {
 }
 
 async function updateTrial(
-  supabase: ReturnType<typeof getAdminClient>,
+  supabase: ReturnType<typeof getSupabaseAdminClient>,
   trialId: string,
   patch: Record<string, unknown>
 ) {
   const { error } = await supabase.from("guest_trials").update(patch).eq("id", trialId);
   if (error) {
-    console.error("guest_trials update failed", trialId, error);
+    logServerFailure("demo-generate", "trial_status_update", error, { trialId });
   }
 }
 
@@ -239,7 +237,7 @@ async function processGuestTrial(args: {
   mode: ModeKey;
   strength: number;
 }) {
-  const supabase = getAdminClient();
+  const supabase = getSupabaseAdminClient();
   const startedAt = Date.now();
 
   await updateTrial(supabase, args.trialId, {
@@ -253,7 +251,11 @@ async function processGuestTrial(args: {
     await updateTrial(supabase, args.trialId, {
       status: "failed",
       generation_status: "error",
-      generation_error: "Missing OPENAI_API_KEY.",
+      generation_error: "missing_openai_key",
+    });
+    logServerFailure("demo-generate", "openai_configuration", new Error("missing_openai_key"), {
+      trialId: args.trialId,
+      elapsedMs: Date.now() - startedAt,
     });
     return;
   }
@@ -273,14 +275,12 @@ async function processGuestTrial(args: {
     });
 
     const model = getConfiguredImageModel();
-    const fallbackModel = getConfiguredImageModelFallback(model);
     const quality = getConfiguredImageQuality("low");
-    const size = getConfiguredImageSize("1024x1024");
+    const size = getConfiguredImageSize("auto");
 
     logDemoGenerationTiming("OpenAI image call started", startedAt, {
       trialId: args.trialId,
       model,
-      fallbackModel,
       quality,
       size,
       passCount: 1,
@@ -300,26 +300,6 @@ async function processGuestTrial(args: {
         size,
       });
       payload = await openAiRes.json().catch(() => ({} as any));
-
-      if (!openAiRes.ok && fallbackModel) {
-        console.warn("Primary demo image model failed; retrying fallback model.", {
-          model,
-          fallbackModel,
-          status: openAiRes.status,
-          message: payload?.error?.message ?? payload?.error,
-        });
-        openAiRes = await requestImageEdit({
-          apiKey,
-          model: fallbackModel,
-          prompt,
-          inputBytes: args.inputBytes,
-          fileType: args.fileType,
-          fileExt: args.fileExt,
-          quality,
-          size,
-        });
-        payload = await openAiRes.json().catch(() => ({} as any));
-      }
       logDemoGenerationTiming("OpenAI image call finished", startedAt, {
         trialId: args.trialId,
         status: openAiRes.status,
@@ -329,18 +309,25 @@ async function processGuestTrial(args: {
       logDemoGenerationTiming("OpenAI image call finished", startedAt, {
         trialId: args.trialId,
         ok: false,
-        error: error?.message ?? "openai_image_failed",
+        error: safeErrorDetails(error),
       });
       throw error;
     }
 
     if (!openAiRes.ok) {
-      const message =
-        payload?.error?.message ?? payload?.error ?? "OpenAI image edit failed.";
       await updateTrial(supabase, args.trialId, {
         status: "failed",
         generation_status: "error",
-        generation_error: message,
+        generation_error: "openai_image_failed",
+      });
+      logServerFailure("demo-generate", "openai_call", {
+        name: "OpenAIError",
+        code: payload?.error?.code,
+        status: openAiRes.status,
+        type: payload?.error?.type,
+      }, {
+        trialId: args.trialId,
+        elapsedMs: Date.now() - startedAt,
       });
       return;
     }
@@ -350,7 +337,11 @@ async function processGuestTrial(args: {
       await updateTrial(supabase, args.trialId, {
         status: "failed",
         generation_status: "error",
-        generation_error: "Image generation returned no image data.",
+        generation_error: "openai_image_failed",
+      });
+      logServerFailure("demo-generate", "openai_response", new Error("openai_no_image_returned"), {
+        trialId: args.trialId,
+        elapsedMs: Date.now() - startedAt,
       });
       return;
     }
@@ -373,13 +364,22 @@ async function processGuestTrial(args: {
       await updateTrial(supabase, args.trialId, {
         status: "failed",
         generation_status: "error",
-        generation_error: outputUploadErr.message,
+        generation_error: "output_upload_failed",
+      });
+      logServerFailure("demo-generate", "output_storage_upload", outputUploadErr, {
+        trialId: args.trialId,
+        elapsedMs: Date.now() - startedAt,
       });
       return;
     }
     logDemoGenerationTiming("Supabase upload finished", startedAt, {
       trialId: args.trialId,
       outputImagePath,
+    });
+    logDemoGenerationTiming("storage status", startedAt, {
+      trialId: args.trialId,
+      stage: "output_storage_upload",
+      status: "succeeded",
     });
 
     await updateTrial(supabase, args.trialId, {
@@ -388,53 +388,132 @@ async function processGuestTrial(args: {
       generation_status: "generated",
       generation_error: null,
     });
+    logDemoGenerationTiming("final_success", startedAt, {
+      trialId: args.trialId,
+      finalStage: "generated",
+    });
   } catch (error: any) {
     await updateTrial(supabase, args.trialId, {
       status: "failed",
       generation_status: "error",
-      generation_error: error?.message ?? "demo_generation_failed",
+      generation_error: "generation_failed",
+    });
+    logServerFailure("demo-generate", "generation_processing", error, {
+      trialId: args.trialId,
+      elapsedMs: Date.now() - startedAt,
     });
   }
 }
 
 export async function POST(req: NextRequest) {
   const requestStartedAt = Date.now();
-  const requestId = randomUUID();
+  let requestId: string = randomUUID();
   logDemoGenerationTiming("request received", requestStartedAt, { requestId });
 
   try {
-    const form = await req.formData();
-
-    const file = form.get("file");
-    if (!(file instanceof File)) {
-      return NextResponse.json({ error: "missing_file" }, { status: 400 });
+    let body: any;
+    try {
+      body = await req.json();
+    } catch (error) {
+      logServerFailure("demo-generate", "request_validation", error, {
+        requestId,
+        elapsedMs: Date.now() - requestStartedAt,
+      });
+      return NextResponse.json(flowErrorBody("invalid_json", "request_validation", requestId), {
+        status: 400,
+      });
     }
 
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
-      return NextResponse.json({ error: "invalid_file_type" }, { status: 400 });
+    requestId = getRequestId(body?.requestId);
+    let uploadSession;
+    try {
+      uploadSession = verifyDemoUploadSession(body?.sessionToken);
+      if (body?.uploadId !== uploadSession.uploadId) throw new Error("guest_session_invalid");
+    } catch (error) {
+      logServerFailure("demo-generate", "guest_session_validation", error, {
+        requestId,
+        elapsedMs: Date.now() - requestStartedAt,
+      });
+      return NextResponse.json(
+        flowErrorBody("guest_session_invalid", "guest_session_validation", requestId),
+        { status: 400 }
+      );
     }
 
-    if (file.size > 10 * 1024 * 1024) {
-      return NextResponse.json({ error: "file_too_large" }, { status: 400 });
+    const validation = validateImageFileMetadata({
+      name: uploadSession.path,
+      type: uploadSession.fileType,
+      size: uploadSession.fileSize,
+    });
+    if (validation.ok === false) {
+      logServerFailure("demo-generate", "file_validation", new Error(validation.code), {
+        requestId,
+        uploadId: uploadSession.uploadId,
+      });
+      return NextResponse.json(flowErrorBody(validation.code, "file_validation", requestId), {
+        status: 400,
+      });
     }
 
-    const roomType = safeRoomType(String(form.get("roomType") || "living_room"));
-    const goal = safeGoal(String(form.get("goal") || "modern"));
-    const styleKey = safeStyle(String(form.get("styleKey") || "cozy_neutral"));
-    const budgetTier = safeBudget(String(form.get("budgetTier") || "under_500"));
-    const mode = safeMode(String(form.get("mode") || "precision"));
-    const strength = safeStrength(String(form.get("strength") || "60"));
+    const roomType = safeRoomType(String(body?.roomType || "living_room"));
+    const goal = safeGoal(String(body?.goal || "modern"));
+    const styleKey = safeStyle(String(body?.styleKey || "cozy_neutral"));
+    const budgetTier = safeBudget(String(body?.budgetTier || "under_500"));
+    const mode = safeMode(String(body?.mode || "precision"));
+    const strength = safeStrength(String(body?.strength || "60"));
 
-    const supabase = getAdminClient();
-    const ext = safeExt(file);
-    const inputBytes = Buffer.from(await file.arrayBuffer());
+    const supabase = getSupabaseAdminClient();
+    logDemoGenerationTiming("storage status", requestStartedAt, {
+      requestId,
+      uploadId: uploadSession.uploadId,
+      stage: "input_download",
+      status: "started",
+    });
+    const download = await supabase.storage
+      .from(STORAGE_BUCKET_INPUTS)
+      .download(uploadSession.path);
+    if (download.error || !download.data) {
+      logServerFailure("demo-generate", "input_storage_download", download.error, {
+        requestId,
+        uploadId: uploadSession.uploadId,
+        elapsedMs: Date.now() - requestStartedAt,
+      });
+      return NextResponse.json(
+        flowErrorBody("storage_upload_failed", "input_storage_download", requestId),
+        { status: 500 }
+      );
+    }
+
+    const inputBytes = Buffer.from(await download.data.arrayBuffer());
+    if (
+      inputBytes.byteLength <= 0 ||
+      inputBytes.byteLength > MAX_IMAGE_UPLOAD_BYTES ||
+      inputBytes.byteLength !== uploadSession.fileSize ||
+      !hasMatchingImageSignature(inputBytes, validation.mimeType)
+    ) {
+      logServerFailure("demo-generate", "image_content_validation", new Error("invalid_image_content"), {
+        requestId,
+        uploadId: uploadSession.uploadId,
+        inputBytes: inputBytes.byteLength,
+      });
+      return NextResponse.json(
+        flowErrorBody("invalid_image_content", "image_content_validation", requestId),
+        { status: 400 }
+      );
+    }
+    logDemoGenerationTiming("storage status", requestStartedAt, {
+      requestId,
+      uploadId: uploadSession.uploadId,
+      stage: "input_download",
+      status: "succeeded",
+    });
     logDemoGenerationTiming("image input prepared", requestStartedAt, {
       requestId,
       inputBytes: inputBytes.byteLength,
-      fileType: file.type,
+      fileType: validation.mimeType,
     });
     const idempotencyKey = buildDemoIdempotencyKey({
-      inputBytes,
+      uploadId: uploadSession.uploadId,
       roomType,
       goal,
       styleKey,
@@ -443,14 +522,24 @@ export async function POST(req: NextRequest) {
       strength,
     });
 
-    const { data: existingTrial } = await supabase
+    const { data: existingTrial, error: existingTrialError } = await supabase
       .from("guest_trials")
       .select("id,trial_token,status,generation_status,output_image_path")
       .eq("trial_token", idempotencyKey)
-      .in("status", ACTIVE_OR_COMPLETED_TRIAL_STATUSES)
       .maybeSingle();
 
-    if (existingTrial) {
+    if (existingTrialError) {
+      logServerFailure("demo-generate", "generation_job_lookup", existingTrialError, {
+        requestId,
+        uploadId: uploadSession.uploadId,
+      });
+      return NextResponse.json(
+        flowErrorBody("generation_job_creation_failed", "generation_job_lookup", requestId),
+        { status: 500 }
+      );
+    }
+
+    if (existingTrial && ACTIVE_OR_COMPLETED_TRIAL_STATUSES.includes(String(existingTrial.status))) {
       logDemoGenerationTiming("response returned", requestStartedAt, {
         requestId,
         trialId: existingTrial.id,
@@ -460,36 +549,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(getTrialResponse(existingTrial, true), { status: 200 });
     }
 
-    const trialId = randomUUID();
-    const trialToken = idempotencyKey;
-    const inputImagePath = `guest/${trialId}/${randomUUID()}.${ext}`;
-
-    logDemoGenerationTiming("Supabase upload started", requestStartedAt, {
+    const trialId = existingTrial?.id ?? randomUUID();
+    const trialToken = existingTrial?.trial_token ?? idempotencyKey;
+    const inputImagePath = uploadSession.path;
+    logDemoGenerationTiming("generation job creation started", requestStartedAt, {
       requestId,
       trialId,
-      inputImagePath,
-      kind: "input",
+      retried: Boolean(existingTrial),
     });
-    const { error: uploadErr } = await supabase.storage
-      .from(STORAGE_BUCKET_INPUTS)
-      .upload(inputImagePath, inputBytes, {
-        contentType: file.type,
-        upsert: false,
-      });
-
-    if (uploadErr) {
-      return NextResponse.json({ error: uploadErr.message }, { status: 500 });
-    }
-    logDemoGenerationTiming("Supabase upload finished", requestStartedAt, {
-      requestId,
-      trialId,
-      inputImagePath,
-      kind: "input",
-    });
-
-    const { error: insertErr } = await supabase.from("guest_trials").insert({
-      id: trialId,
-      trial_token: trialToken,
+    const trialPayload = {
       input_image_path: inputImagePath,
       room_type: roomType,
       goal,
@@ -500,7 +568,22 @@ export async function POST(req: NextRequest) {
       status: "queued",
       generation_status: "queued",
       generation_error: null,
-    });
+      output_image_path: null,
+    };
+    const jobWrite = existingTrial
+      ? await supabase
+          .from("guest_trials")
+          .update(trialPayload)
+          .eq("id", trialId)
+          .in("status", ["failed", "error"])
+          .select("id")
+          .maybeSingle()
+      : await supabase.from("guest_trials").insert({
+          id: trialId,
+          trial_token: trialToken,
+          ...trialPayload,
+        });
+    const insertErr = jobWrite.error;
 
     if (insertErr) {
       const { data: insertedElsewhere } = await supabase
@@ -520,16 +603,53 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(getTrialResponse(insertedElsewhere, true), { status: 200 });
       }
 
-      return NextResponse.json({ error: insertErr.message }, { status: 500 });
+      logServerFailure("demo-generate", "generation_job_creation", insertErr, {
+        requestId,
+        trialId,
+        elapsedMs: Date.now() - requestStartedAt,
+      });
+      return NextResponse.json(
+        flowErrorBody("generation_job_creation_failed", "generation_job_creation", requestId),
+        { status: 500 }
+      );
     }
+
+    if (existingTrial && !jobWrite.data) {
+      const { data: nowActive } = await supabase
+        .from("guest_trials")
+        .select("id,trial_token,status,generation_status,output_image_path")
+        .eq("id", trialId)
+        .maybeSingle();
+      if (nowActive && ACTIVE_OR_COMPLETED_TRIAL_STATUSES.includes(String(nowActive.status))) {
+        return NextResponse.json(getTrialResponse(nowActive, true), { status: 200 });
+      }
+
+      logServerFailure(
+        "demo-generate",
+        "generation_job_creation",
+        new Error("generation_job_creation_failed"),
+        { requestId, trialId }
+      );
+      return NextResponse.json(
+        flowErrorBody("generation_job_creation_failed", "generation_job_creation", requestId),
+        { status: 500 }
+      );
+    }
+
+    logDemoGenerationTiming("generation job creation finished", requestStartedAt, {
+      requestId,
+      trialId,
+      status: "queued",
+      retried: Boolean(existingTrial),
+    });
 
     after(async () => {
       await processGuestTrial({
         trialId,
         inputImagePath,
         inputBytes,
-        fileType: file.type,
-        fileExt: ext,
+        fileType: validation.mimeType,
+        fileExt: validation.extension,
         roomType,
         goal,
         styleKey,
@@ -545,12 +665,22 @@ export async function POST(req: NextRequest) {
       status: 202,
       reused: false,
     });
-    return NextResponse.json(getTrialResponse({ id: trialId, trial_token: trialToken }), {
-      status: 202,
+    logDemoGenerationTiming("final_success", requestStartedAt, {
+      requestId,
+      trialId,
+      finalStage: "job_queued",
     });
-  } catch (e: any) {
     return NextResponse.json(
-      { error: e?.message ?? "demo_generate_failed" },
+      getTrialResponse({ id: trialId, trial_token: trialToken }, false, Boolean(existingTrial)),
+      { status: 202 }
+    );
+  } catch (error) {
+    logServerFailure("demo-generate", "generation_request", error, {
+      requestId,
+      elapsedMs: Date.now() - requestStartedAt,
+    });
+    return NextResponse.json(
+      flowErrorBody("generation_request_failed", "generation_request", requestId),
       { status: 500 }
     );
   }
