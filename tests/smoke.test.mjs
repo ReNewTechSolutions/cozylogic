@@ -54,6 +54,9 @@ describe("route smoke checks", () => {
     assert.match(route, /after\(async \(\) =>/);
     assert.match(route, /getJobResponse/);
     assert.match(route, /idempotencyKey/);
+    assert.match(route, /\.select\("id,status,generation_status,generation_error,created_at"\)/);
+    assert.match(route, /\.order\("created_at", \{ ascending: false \}\)/);
+    assert.doesNotMatch(route, /\.order\("updated_at"/);
     assert.match(route, /\.eq\("status", "draft"\)/);
     assert.match(route, /generation_status: "queued"/);
     assert.match(status, /resultUrl: `\/app\/result\/\$\{room\.id\}`/);

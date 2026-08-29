@@ -132,7 +132,7 @@ function getJobResponse(roomId: string, idempotencyKey: string, reused = false) 
 async function findExistingMatchingRoom(supabase: any, userId: string, room: RoomRow) {
   let query = supabase
     .from("rooms")
-    .select("id,status,generation_status,generation_error,updated_at")
+    .select("id,status,generation_status,generation_error,created_at")
     .eq("user_id", userId)
     .eq("input_image_path", room.input_image_path)
     .eq("room_type", room.room_type)
@@ -140,7 +140,7 @@ async function findExistingMatchingRoom(supabase: any, userId: string, room: Roo
     .eq("style_key", room.style_key)
     .eq("budget_tier", room.budget_tier)
     .in("status", ACTIVE_OR_COMPLETED_ROOM_STATUSES)
-    .order("updated_at", { ascending: false })
+    .order("created_at", { ascending: false })
     .limit(1);
 
   if (room.mode) query = query.eq("mode", room.mode);
