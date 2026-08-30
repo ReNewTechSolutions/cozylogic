@@ -26,7 +26,7 @@ export async function GET(
 
   const { data: room, error } = await supabase
     .from("rooms")
-    .select("id,user_id,status,generation_status,generation_error,updated_at")
+    .select("id,user_id,status,generation_status,generation_error")
     .eq("id", roomId)
     .single();
 
@@ -43,6 +43,5 @@ export async function GET(
     status: room.status,
     generation_status: room.generation_status,
     generation_error: room.generation_error,
-    updated_at: room.updated_at,
   });
 }

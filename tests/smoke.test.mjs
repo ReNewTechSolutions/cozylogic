@@ -47,6 +47,7 @@ describe("route smoke checks", () => {
     const page = read("src/app/(protected)/app/new/page.tsx");
     const route = read("src/app/api/generate/route.ts");
     const status = read("src/app/api/generate/status/route.ts");
+    const roomStatus = read("src/app/api/rooms/[roomId]/status/route.ts");
 
     assert.match(page, /fetch\("\/api\/generate"/);
     assert.match(page, /GenerationOverlay/);
@@ -64,6 +65,8 @@ describe("route smoke checks", () => {
     assert.doesNotMatch(route, /(?<!generation_)status: "error"/);
     assert.match(route, /generation_status: "queued"/);
     assert.match(status, /resultUrl: `\/app\/result\/\$\{room\.id\}`/);
+    assert.doesNotMatch(status, /updated_at/);
+    assert.doesNotMatch(roomStatus, /updated_at/);
   });
 
   it("keeps demo generation idempotent and waiting on status", () => {

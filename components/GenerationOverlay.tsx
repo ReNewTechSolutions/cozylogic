@@ -20,7 +20,6 @@ type StatusResponse = {
   status?: string | null;
   generation_status?: string | null;
   generation_error?: string | null;
-  updated_at?: string | null;
   error?: string;
 };
 

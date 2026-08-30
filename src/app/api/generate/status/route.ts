@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
 
   const { data: room, error } = await supabase
     .from("rooms")
-    .select("id,user_id,status,generation_status,generation_error,updated_at")
+    .select("id,user_id,status,generation_status,generation_error")
     .eq("id", id)
     .single();
 
@@ -53,6 +53,5 @@ export async function GET(req: NextRequest) {
     resultUrl: `/app/result/${room.id}`,
     completedGenerationId: generation?.id ?? null,
     output_image_path: generation?.output_image_path ?? null,
-    updated_at: room.updated_at,
   });
 }
