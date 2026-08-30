@@ -58,7 +58,7 @@ type RoomRow = {
   strength: number | null;
 };
 
-const ACTIVE_OR_COMPLETED_ROOM_STATUSES = ["queued", "generating", "generated"];
+const ACTIVE_OR_COMPLETED_ROOM_STATUSES = ["generating", "generated"];
 const ROOM_SELECT =
   "id,user_id,room_type,goal,style_key,budget_tier,input_image_path,status,generation_status,generation_error,mode,strength";
 
@@ -550,7 +550,7 @@ async function processRoomGeneration(opts: {
             ? "output_upload_failed"
             : "generation_failed";
     await setRoomStep(admin, room.id, {
-      status: "error",
+      status: "failed",
       generation_status: "error",
       generation_error: generationError,
     });
@@ -669,7 +669,7 @@ export async function POST(req: NextRequest) {
     });
     const { data: locked, error: lockErr } = await supabase
       .from("rooms")
-      .update({ status: "queued", generation_status: "queued", generation_error: null })
+      .update({ status: "generating", generation_status: "queued", generation_error: null })
       .eq("id", room.id)
       .eq("status", "draft")
       .select("id")
@@ -730,7 +730,7 @@ export async function POST(req: NextRequest) {
     if (!bypass) {
       if (typeof planState.limit === "number" && planState.used >= planState.limit) {
         await setRoomStep(supabase, room.id, {
-          status: "error",
+          status: "failed",
           generation_status: "error",
           generation_error: "limit_reached",
         });
@@ -749,7 +749,7 @@ export async function POST(req: NextRequest) {
         } catch {}
       }
       await setRoomStep(supabase, room.id, {
-        status: "error",
+        status: "failed",
         generation_status: "error",
         generation_error: "missing_openai_key",
       });
@@ -760,7 +760,7 @@ export async function POST(req: NextRequest) {
 
     const queuedRoom: RoomRow = {
       ...room,
-      status: "queued",
+      status: "generating",
       generation_status: "queued",
       generation_error: null,
     };

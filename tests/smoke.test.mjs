@@ -58,6 +58,10 @@ describe("route smoke checks", () => {
     assert.match(route, /\.order\("created_at", \{ ascending: false \}\)/);
     assert.doesNotMatch(route, /\.order\("updated_at"/);
     assert.match(route, /\.eq\("status", "draft"\)/);
+    assert.match(route, /\.update\(\{ status: "generating", generation_status: "queued"/);
+    assert.match(route, /status: "failed",\s+generation_status: "error"/);
+    assert.doesNotMatch(route, /\.update\(\{ status: "queued"/);
+    assert.doesNotMatch(route, /(?<!generation_)status: "error"/);
     assert.match(route, /generation_status: "queued"/);
     assert.match(status, /resultUrl: `\/app\/result\/\$\{room\.id\}`/);
   });
