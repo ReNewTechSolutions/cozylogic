@@ -64,7 +64,7 @@ export default function ResultMissionBoard({
       body: ROOM_KEEPERS[room],
     },
     {
-      label: "Optional buys",
+      label: budget === "rearrange_only" ? "Use what you have" : "Optional buys",
       title: BUDGET_LABELS[budget],
       body: BUDGET_BUYS[budget],
     },

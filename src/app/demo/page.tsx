@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   BUDGET_PREVIEW_SETTINGS,
   BUDGET_TIERS,
@@ -13,16 +14,10 @@ import {
   STORAGE_BUCKET_INPUTS,
 } from "@/lib/cozylogic/constants";
 import BudgetSelect from "@/components/BudgetSelect";
-import GenerationOverlay from "@/components/GenerationOverlay";
 import StyleTile from "@/components/StyleTile";
 import { readFriendlyApiError } from "@/lib/cozylogic/flowErrors";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 import { validateImageFileMetadata } from "@/lib/cozylogic/uploads";
-
-type DemoGenerationJob = {
-  statusUrl?: string;
-  redirectTo?: string;
-};
 
 type PreparedUpload = {
   requestId: string;
@@ -35,6 +30,7 @@ type PreparedUpload = {
 const DEFAULT_GOAL = "refresh_budget" as (typeof GOALS)[number];
 
 export default function DemoPage() {
+  const router = useRouter();
   const submitRef = useRef(false);
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
 
@@ -44,15 +40,7 @@ export default function DemoPage() {
   const [budgetTier, setBudgetTier] = useState<(typeof BUDGET_TIERS)[number]>(DEFAULT_BUDGET_TIER);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [generationJob, setGenerationJob] = useState<DemoGenerationJob | null>(null);
   const previewPlan = BUDGET_PREVIEW_SETTINGS[budgetTier];
-
-  const resetFailedGeneration = () => {
-    submitRef.current = false;
-    setGenerationJob(null);
-    setBusy(false);
-    setError("That free preview did not finish. You can try again or tweak one choice.");
-  };
 
   const onFileChange = (nextFile: File | null) => {
     setError(null);
@@ -194,13 +182,10 @@ export default function DemoPage() {
         throw new Error("The preview job response was incomplete. Please try again.");
       }
 
-      setGenerationJob({
-        statusUrl: json.statusUrl ?? `/api/demo/${encodeURIComponent(token)}/status`,
-        redirectTo: json.resultUrl ?? `/demo/result/${token}`,
-      });
+      const resultUrl = json.resultUrl ?? `/demo/result/${encodeURIComponent(token)}`;
       shouldKeepWaiting = true;
+      router.replace(resultUrl);
     } catch (e: any) {
-      setGenerationJob(null);
       setError(e?.message ?? "We could not start the room preview. Please try again.");
     } finally {
       if (!shouldKeepWaiting) {
@@ -212,16 +197,6 @@ export default function DemoPage() {
 
   return (
     <main className="min-h-screen bg-[#F7EFE3] text-[#1F1F1F]">
-      {generationJob ? (
-        <GenerationOverlay
-          statusUrl={generationJob.statusUrl}
-          redirectTo={generationJob.redirectTo}
-          onRetry={resetFailedGeneration}
-          onDismiss={resetFailedGeneration}
-          retryLabel="Try free preview again"
-        />
-      ) : null}
-
       <div className="mx-auto max-w-[980px] px-5 py-8 sm:px-6 sm:py-12">
         <div>
           <div className="inline-flex rotate-[-1deg] rounded-lg border border-[#DFC588] bg-[#F7E3A6] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#5F4A2E] shadow-sm">
@@ -322,7 +297,7 @@ export default function DemoPage() {
           <button
             type="button"
             onClick={onSubmit}
-            disabled={busy || !!generationJob}
+            disabled={busy}
             className="mt-7 min-h-[52px] w-full rounded-lg bg-[#6F8373] px-4 py-3 text-sm font-semibold text-white shadow-sm disabled:opacity-60"
           >
             {busy ? "Starting your preview…" : "Preview my free room refresh"}

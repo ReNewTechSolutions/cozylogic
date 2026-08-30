@@ -1,0 +1,93 @@
+{
+  "fixtureId": "free-fix-preservation-canary-v1",
+  "variant": "current",
+  "inputPath": "/Users/feliciagoad/.codex/visualizations/2026/08/26/01a03ba7-c09f-7751-98ab-e6140640edb8/cozylogic-free-fix-canary.png",
+  "outputPath": "/Users/feliciagoad/cozylogic/qa-artifacts/gpt-image-2-medium-free-fix-canary.png",
+  "request": {
+    "model": "gpt-image-2",
+    "quality": "medium",
+    "size": "auto",
+    "n": 1,
+    "inputFidelity": "omitted",
+    "imageInvocations": 1,
+    "sdkMaxRetries": 0,
+    "fallbackCalls": 0,
+    "textModelCalls": 0,
+    "estimatedCostUsd": 0.0622
+  },
+  "expectedInventory": [
+    "sofa",
+    "armchair",
+    "coffee table",
+    "TV",
+    "console",
+    "storage basket",
+    "floor lamp",
+    "treadmill",
+    "window",
+    "doorway"
+  ],
+  "preservedInventory": [
+    "sofa",
+    "armchair",
+    "coffee table",
+    "TV",
+    "console",
+    "storage basket",
+    "floor lamp",
+    "treadmill",
+    "window",
+    "doorway"
+  ],
+  "inventoryClassifications": {
+    "sofa": "PRESERVED",
+    "armchair": "PRESERVED",
+    "coffee table": "MOVED BUT PRESERVED",
+    "TV": "PRESERVED",
+    "console": "PRESERVED",
+    "storage basket": "PRESERVED",
+    "floor lamp": "PRESERVED",
+    "treadmill": "MOVED BUT PRESERVED",
+    "window": "PRESERVED",
+    "doorway": "PRESERVED"
+  },
+  "inventedMajorObjects": 0,
+  "architectureChanges": 0,
+  "fidelityChecks": {
+    "architecture": "PRESERVED",
+    "cameraAngle": "PRESERVED",
+    "cropFraming": "PRESERVED",
+    "windows": "PRESERVED",
+    "doorway": "PRESERVED",
+    "tvPlacement": "PRESERVED",
+    "rug": "MOVED BUT PRESERVED; same identity and style, with modest generated pattern-detail variation",
+    "curtains": "PRESERVED; no curtains existed and none were added",
+    "upholsteryStyle": "PRESERVED",
+    "addedDecor": "NONE",
+    "replacementFurniture": "NONE",
+    "removedStorage": "NONE",
+    "removedLighting": "NONE",
+    "removedEquipment": "NONE"
+  },
+  "timingMs": {
+    "inputPreparation": 3,
+    "upload": 2133,
+    "submitToGenerationStart": 2169,
+    "openAIGeneration": 40082,
+    "openAIRoundTrip": 42251,
+    "outputPersistence": 6,
+    "totalUserVisible": 42261
+  },
+  "responseMetadata": {
+    "quality": "medium",
+    "size": "1448x1086",
+    "usage": {
+      "inputTokens": 2296,
+      "inputImageTokens": 1452,
+      "inputTextTokens": 844,
+      "outputTokens": 1544,
+      "totalTokens": 3840
+    }
+  },
+  "reviewerNotes": "Manual side-by-side review found all 10 expected objects recognizable and retained, with no invented major objects or architecture changes. Coffee table and treadmill appear subtly repositioned. Rug pattern and outdoor foliage are not pixel-identical, but the rug identity/style and window architecture remain intact."
+}

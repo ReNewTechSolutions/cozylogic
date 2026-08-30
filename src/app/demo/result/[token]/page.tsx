@@ -1,6 +1,4 @@
 // src/app/demo/result/[token]/page.tsx
-import { notFound } from "next/navigation";
-
 import { createClient } from "@supabase/supabase-js";
 import {
   BUDGET_LABELS,
@@ -12,10 +10,38 @@ import {
 import GenerationOverlay from "@/components/GenerationOverlay";
 import ResultMissionBoard from "@/components/ResultMissionBoard";
 import ShopThisLook from "@/components/ShopThisLook";
+import UseWhatYouHave from "@/components/UseWhatYouHave";
 
 type PageProps = {
   params: Promise<{ token: string }>;
 };
+
+function DemoRecoveryScreen() {
+  return (
+    <main className="min-h-screen bg-[#F7EFE3] p-6 text-[#1F1F1F] sm:p-10">
+      <div className="mx-auto max-w-xl rounded-lg border border-[#D8C7AE] bg-[#FFFDF7] p-6 shadow-sm">
+        <h1 className="text-2xl font-semibold">This preview link is not available</h1>
+        <p className="mt-3 text-sm leading-6 text-[#6A5A49]">
+          It may be incomplete, expired, or no longer valid. You can safely start another free preview; this page will not create a generation.
+        </p>
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+          <a
+            href="/demo"
+            className="rounded-lg bg-[#1F1F1F] px-4 py-2 text-center text-sm font-semibold text-white"
+          >
+            Try another preview
+          </a>
+          <a
+            href="/"
+            className="rounded-lg border border-[#D8C7AE] bg-white px-4 py-2 text-center text-sm font-semibold text-[#1F1F1F]"
+          >
+            Home
+          </a>
+        </div>
+      </div>
+    </main>
+  );
+}
 
 function getAdminClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
@@ -55,7 +81,7 @@ export default async function DemoResultPage({ params }: PageProps) {
   const { token } = await params;
 
   if (!token || token === "undefined") {
-    notFound();
+    return <DemoRecoveryScreen />;
   }
 
   const supabase = getAdminClient();
@@ -69,7 +95,7 @@ export default async function DemoResultPage({ params }: PageProps) {
     .single();
 
   if (error || !trial) {
-    notFound();
+    return <DemoRecoveryScreen />;
   }
 
   const inputUrl = await createSignedUrl(STORAGE_BUCKET_INPUTS, trial.input_image_path);
@@ -87,8 +113,7 @@ export default async function DemoResultPage({ params }: PageProps) {
 
   const isWorking =
     !isFailed &&
-    (trial.status === "draft" ||
-      trial.status === "queued" ||
+    (trial.status === "queued" ||
       trial.status === "generating" ||
       trial.generation_status === "queued" ||
       trial.generation_status === "generating");
@@ -216,13 +241,17 @@ export default async function DemoResultPage({ params }: PageProps) {
           />
         ) : null}
 
-        {outputUrl && !isExpired ? (
+        {outputUrl && !isExpired && trial.budget_tier !== "rearrange_only" ? (
           <ShopThisLook
             roomType={trial.room_type}
             goal={trial.goal}
             styleKey={trial.style_key}
             budgetTier={trial.budget_tier}
           />
+        ) : null}
+
+        {outputUrl && !isExpired && trial.budget_tier === "rearrange_only" ? (
+          <UseWhatYouHave roomType={trial.room_type} />
         ) : null}
 
         <div className="relative mt-8 rounded-lg border border-[#2D2822] bg-[#1F1F1F] px-6 py-8 text-white shadow-[0_22px_60px_rgba(31,31,31,0.18)] sm:px-8">

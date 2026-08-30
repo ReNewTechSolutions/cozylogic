@@ -21,3 +21,7 @@ pnpm-debug.log*
 
 # misc
 *.local
+
+# paid QA image outputs stay local; review metadata may be committed as evidence
+qa-artifacts/*.png
+.vercel

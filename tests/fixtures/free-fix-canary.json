@@ -1,0 +1,33 @@
+{
+  "id": "free-fix-preservation-canary-v1",
+  "selections": {
+    "roomType": "living_room",
+    "roomTypeLabel": "Living room",
+    "goal": "refresh_budget",
+    "styleKey": "cozy_neutral",
+    "styleLabel": "Cozy Neutral",
+    "budgetTier": "rearrange_only",
+    "mode": "reality_lock",
+    "strength": 25
+  },
+  "expectedInventory": [
+    "sofa",
+    "armchair",
+    "coffee table",
+    "TV",
+    "console",
+    "storage basket",
+    "floor lamp",
+    "treadmill",
+    "window",
+    "doorway"
+  ],
+  "targets": {
+    "retentionPercent": 100,
+    "inventedMajorObjects": 0,
+    "architectureChanges": 0,
+    "outputImages": 1,
+    "imageInvocations": 1
+  },
+  "scoring": "manual_visual_review"
+}

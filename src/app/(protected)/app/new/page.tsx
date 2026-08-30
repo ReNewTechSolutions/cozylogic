@@ -9,7 +9,6 @@ import Stepper from "@/components/Stepper";
 import UploadCard from "@/components/UploadCard";
 import StyleTile from "@/components/StyleTile";
 import BudgetSelect from "@/components/BudgetSelect";
-import GenerationOverlay from "@/components/GenerationOverlay";
 import { readFriendlyApiError } from "@/lib/cozylogic/flowErrors";
 import {
   BUDGET_LABELS,
@@ -26,11 +25,6 @@ import {
 } from "@/lib/cozylogic/constants";
 
 type StepKey = "upload" | "style" | "budget" | "review";
-type GenerationJob = {
-  id: string;
-  statusUrl: string;
-  redirectTo: string;
-};
 
 const STEPS: { key: StepKey; label: string }[] = [
   { key: "upload", label: "Room" },
@@ -87,7 +81,6 @@ export default function NewRedesignPage() {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [generationJob, setGenerationJob] = useState<GenerationJob | null>(null);
   const activeStepCopy = STEP_COPY[step];
   const previewPlan = BUDGET_PREVIEW_SETTINGS[budgetTier];
 
@@ -197,15 +190,6 @@ export default function NewRedesignPage() {
     setStep(prev);
   };
 
-  const resetFailedGeneration = () => {
-    generateSubmitRef.current = false;
-    draftRoomPromiseRef.current = null;
-    setGenerationJob(null);
-    setBusy(false);
-    setRoomId(null);
-    setError("That preview did not finish. You can try again now.");
-  };
-
   const onGenerate = async () => {
     if (generateSubmitRef.current) return;
 
@@ -262,8 +246,15 @@ export default function NewRedesignPage() {
       const json = await res.json().catch(() => ({} as any));
       if (!res.ok) {
         draftRoomPromiseRef.current = null;
-        setRoomId(null);
-        setGenerationJob(null);
+        const retryableWithExistingDraft = [
+          "auth",
+          "request_validation",
+          "room_lookup",
+          "authorization",
+          "generation_job_creation",
+          "generation_request",
+        ].includes(String((json as any)?.stage ?? ""));
+        if (!retryableWithExistingDraft) setRoomId(null);
         setError(
           readFriendlyApiError(
             json,
@@ -273,19 +264,12 @@ export default function NewRedesignPage() {
         return;
       }
 
-      const jobId = (json as any)?.generationId ?? id;
       const roomResultId = (json as any)?.roomId ?? id;
-      setGenerationJob({
-        id: jobId,
-        statusUrl:
-          (json as any)?.statusUrl ?? `/api/generate/status?id=${encodeURIComponent(jobId)}`,
-        redirectTo: (json as any)?.resultUrl ?? `/app/result/${roomResultId}`,
-      });
+      const resultUrl = (json as any)?.resultUrl ?? `/app/result/${roomResultId}`;
       shouldKeepWaiting = true;
+      router.replace(resultUrl);
     } catch (e: any) {
       draftRoomPromiseRef.current = null;
-      setRoomId(null);
-      setGenerationJob(null);
       setError(e?.message ?? "We could not start the room preview. Please try again.");
     } finally {
       if (!shouldKeepWaiting) {
@@ -297,16 +281,6 @@ export default function NewRedesignPage() {
 
   return (
     <main className="min-h-screen bg-[#F7EFE3] text-[#1F1F1F]">
-      {generationJob ? (
-        <GenerationOverlay
-          statusUrl={generationJob.statusUrl}
-          redirectTo={generationJob.redirectTo}
-          onRetry={resetFailedGeneration}
-          onDismiss={resetFailedGeneration}
-          retryLabel="Try this preview again"
-        />
-      ) : null}
-
       <div className="mx-auto w-full max-w-[900px] px-6 py-10">
         <div className="flex items-start justify-between gap-6">
           <div>
@@ -448,7 +422,7 @@ export default function NewRedesignPage() {
             <button
               type="button"
               onClick={goBack}
-              disabled={busy || !!generationJob || stepIndex === 0}
+              disabled={busy || stepIndex === 0}
               className="min-h-[48px] rounded-lg border border-[#D8C7AE] bg-[#FFFDF7] px-5 py-3 text-sm font-medium shadow-sm disabled:opacity-50"
             >
               Back
@@ -457,7 +431,7 @@ export default function NewRedesignPage() {
             <button
               type="button"
               onClick={step === "review" ? onGenerate : goNext}
-              disabled={busy || !!generationJob || !canContinue}
+              disabled={busy || !canContinue}
               className="min-h-[48px] rounded-lg bg-[#1F1F1F] px-5 py-3 text-sm font-medium text-white shadow-sm disabled:opacity-50"
             >
               {step === "review" ? (busy ? "Starting preview…" : "Preview the refresh") : "Next step"}

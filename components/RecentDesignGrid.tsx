@@ -11,7 +11,6 @@ import {
   STYLE_LABELS,
   ROOM_LABELS,
   BUDGET_LABELS,
-  GOAL_LABELS,
   STYLES,
   ROOM_TYPES,
   BUDGET_TIERS,
@@ -139,7 +138,7 @@ export default function RecentDesignGrid({ items }: { items: RecentCard[] }) {
             </div>
 
             <div className="mt-1 text-xs text-[#6A6A6A]">
-              {BUDGET_LABELS[item.room.budget_tier]} • {GOAL_LABELS[item.room.goal]}
+              {BUDGET_LABELS[item.room.budget_tier]}
             </div>
 
             <div className="mt-2 flex items-center justify-between text-xs text-[#6A6A6A]">

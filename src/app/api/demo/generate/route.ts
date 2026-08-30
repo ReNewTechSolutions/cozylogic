@@ -17,13 +17,12 @@ import {
 import { verifyDemoUploadSession } from "@/lib/cozylogic/demoUploadSession";
 import { flowErrorBody } from "@/lib/cozylogic/flowErrors";
 import {
-  getConfiguredImageModel,
-  getConfiguredImageQuality,
-  getConfiguredImageSize,
+  getConfiguredImageGeneration,
   type ImageQuality,
   type ImageSize,
 } from "@/lib/cozylogic/generationConfig";
-import { STRICT_INVENTORY_PRESERVATION_RULES } from "@/lib/cozylogic/inventoryPrompt";
+import { buildFreeFixImagePrompt } from "@/lib/cozylogic/freeFixPrompt";
+import { getImageEditInputFidelity } from "@/lib/cozylogic/imageEditPolicy";
 import {
   getRequestId,
   logServerEvent,
@@ -42,7 +41,7 @@ type GoalKey = (typeof GOALS)[number];
 type StyleKey = (typeof STYLES)[number];
 type BudgetTier = (typeof BUDGET_TIERS)[number];
 type ModeKey = "reality_lock" | "precision" | "creative";
-const ACTIVE_OR_COMPLETED_TRIAL_STATUSES = ["draft", "queued", "generating", "generated"];
+const ACTIVE_OR_COMPLETED_TRIAL_STATUSES = ["queued", "generating", "generated"];
 
 function logDemoGenerationTiming(
   event: string,
@@ -149,15 +148,19 @@ function buildDemoPrompt(args: {
   mode: ModeKey;
   strength: number;
 }) {
+  if (args.budgetTier === "rearrange_only") {
+    return buildFreeFixImagePrompt({
+      roomTypeLabel: friendlyLabel(ROOM_LABELS, args.roomType),
+      styleLabel: friendlyLabel(STYLE_LABELS, args.styleKey),
+    });
+  }
+
   const modeInstruction =
     args.mode === "reality_lock"
       ? "Preserve the real room very tightly. Keep walls, windows, doors, flooring, perspective, and camera angle as close to the original as possible."
       : args.mode === "creative"
         ? "Allow visible style changes while preserving the original room structure, fixed elements, and camera angle."
         : "Create a realistic redesign with controlled, believable changes that still clearly matches the original room.";
-  const strictInventoryRules =
-    args.budgetTier === "rearrange_only" ? STRICT_INVENTORY_PRESERVATION_RULES : "";
-
   return [
     "You are redesigning a real interior photo.",
     `Room type: ${friendlyLabel(ROOM_LABELS, args.roomType)}.`,
@@ -167,16 +170,13 @@ function buildDemoPrompt(args: {
     `Budget meaning: ${friendlyLabel(BUDGET_PROMPT_MEANINGS, args.budgetTier)}.`,
     `Strength: ${args.strength}/100.`,
     modeInstruction,
-    strictInventoryRules,
     "Return exactly one realistic AFTER image of this same room.",
     "Do not return a collage, split screen, before-and-after composite, multiple views, text, labels, logos, or watermarks.",
     "Keep the image photorealistic.",
     "Preserve the architecture, walls, windows, doors, flooring, built-ins, and room dimensions.",
     "Keep the same camera angle, viewpoint, framing, lens perspective, and crop.",
     "If a TV is present, keep the same TV on the same wall and in the same location, orientation, and scale.",
-    args.budgetTier === "rearrange_only"
-      ? "Do not add, replace, remove, hide, or crop out any major visible object."
-      : "Keep major furniture in place unless a small, realistic adjustment clearly improves function.",
+    "Keep major furniture in place unless a small, realistic adjustment clearly improves function.",
     "Do not force major movement or invent a different room.",
     "Do not turn this into a fantasy render.",
     "Make only practical changes that fit the selected style and budget.",
@@ -192,12 +192,17 @@ async function requestImageEdit(args: {
   fileExt: string;
   quality: ImageQuality;
   size: ImageSize;
+  budgetTier: BudgetTier;
 }) {
   const formData = new FormData();
   formData.append("model", args.model);
   formData.append("prompt", args.prompt);
   formData.append("size", args.size);
   formData.append("quality", args.quality);
+  formData.append("n", "1");
+  formData.append("output_format", "png");
+  const inputFidelity = getImageEditInputFidelity(args.model, args.budgetTier);
+  if (inputFidelity) formData.append("input_fidelity", inputFidelity);
   formData.append(
     "image",
     bufferToBlob(args.inputBytes, args.fileType, `input.${args.fileExt}`),
@@ -274,9 +279,11 @@ async function processGuestTrial(args: {
       strength: args.strength,
     });
 
-    const model = getConfiguredImageModel();
-    const quality = getConfiguredImageQuality("low");
-    const size = getConfiguredImageSize("auto");
+    const { model, quality, size } = getConfiguredImageGeneration({
+      budgetTier: args.budgetTier,
+      defaultQuality: "low",
+      defaultSize: "auto",
+    });
 
     logDemoGenerationTiming("OpenAI image call started", startedAt, {
       trialId: args.trialId,
@@ -298,6 +305,7 @@ async function processGuestTrial(args: {
         fileExt: args.fileExt,
         quality,
         size,
+        budgetTier: args.budgetTier,
       });
       payload = await openAiRes.json().catch(() => ({} as any));
       logDemoGenerationTiming("OpenAI image call finished", startedAt, {
@@ -575,7 +583,7 @@ export async function POST(req: NextRequest) {
           .from("guest_trials")
           .update(trialPayload)
           .eq("id", trialId)
-          .in("status", ["failed", "error"])
+          .in("status", ["draft", "failed", "error"])
           .select("id")
           .maybeSingle()
       : await supabase.from("guest_trials").insert({

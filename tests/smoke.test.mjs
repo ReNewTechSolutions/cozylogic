@@ -50,8 +50,8 @@ describe("route smoke checks", () => {
     const roomStatus = read("src/app/api/rooms/[roomId]/status/route.ts");
 
     assert.match(page, /fetch\("\/api\/generate"/);
-    assert.match(page, /GenerationOverlay/);
-    assert.match(page, /\/api\/generate\/status\?id=/);
+    assert.doesNotMatch(page, /GenerationOverlay/);
+    assert.match(page, /router\.replace\(resultUrl\)/);
     assert.match(route, /after\(async \(\) =>/);
     assert.match(route, /getJobResponse/);
     assert.match(route, /idempotencyKey/);
@@ -69,23 +69,23 @@ describe("route smoke checks", () => {
     assert.doesNotMatch(roomStatus, /updated_at/);
   });
 
-  it("keeps demo generation idempotent and waiting on status", () => {
+  it("keeps demo generation idempotent and redirects to durable status", () => {
     const page = read("src/app/demo/page.tsx");
     const route = read("src/app/api/demo/generate/route.ts");
     const uploadRoute = read("src/app/api/demo/upload/route.ts");
 
-    assert.match(page, /GenerationOverlay/);
-    assert.match(page, /\/api\/demo\/\$\{encodeURIComponent\(token\)\}\/status/);
+    assert.doesNotMatch(page, /GenerationOverlay/);
+    assert.match(page, /router\.replace\(resultUrl\)/);
     assert.match(page, /uploadToSignedUrl/);
     assert.match(page, /if \(submitRef\.current\) return/);
     assert.match(route, /buildDemoIdempotencyKey/);
     assert.match(route, /\.eq\("trial_token", idempotencyKey\)/);
     assert.match(route, /verifyDemoUploadSession/);
-    assert.match(route, /\.in\("status", \["failed", "error"\]\)/);
+    assert.match(route, /\.in\("status", \["draft", "failed", "error"\]\)/);
     assert.match(route, /retried/);
     assert.match(uploadRoute, /createSignedUploadUrl/);
     assert.match(uploadRoute, /guest_session_created/);
-    assert.match(route, /getConfiguredImageModel\(\)/);
+    assert.match(route, /getConfiguredImageGeneration/);
   });
 
   it("keeps the room preview controls friendly and card based", () => {
@@ -145,6 +145,8 @@ describe("route smoke checks", () => {
     assert.doesNotMatch(result, /recommendations=\{/);
     assert.match(result, /<ShopThisLook/);
     assert.match(demoResult, /<ShopThisLook/);
+    assert.match(result, /<UseWhatYouHave/);
+    assert.match(demoResult, /<UseWhatYouHave/);
   });
 
   it("keeps image generation fast and server-configured", () => {
@@ -155,20 +157,28 @@ describe("route smoke checks", () => {
 
     assert.match(envExample, /COZYLOGIC_IMAGE_QUALITY=low/);
     assert.match(envExample, /COZYLOGIC_IMAGE_SIZE=auto/);
+    assert.match(envExample, /COZYLOGIC_FREE_FIX_IMAGE_MODEL=gpt-image-2/);
+    assert.match(envExample, /COZYLOGIC_FREE_FIX_IMAGE_QUALITY=medium/);
+    assert.match(envExample, /COZYLOGIC_FREE_FIX_IMAGE_SIZE=auto/);
     assert.match(config, /getConfiguredImageQuality/);
     assert.match(config, /getConfiguredImageSize/);
-    assert.match(route, /getConfiguredImageQuality\(planState\.plan === "pro" \? "medium" : "low"\)/);
-    assert.match(route, /getConfiguredImageSize\("auto"\)/);
+    assert.match(config, /getConfiguredImageGeneration/);
+    assert.match(route, /budgetTier: room\.budget_tier/);
+    assert.match(route, /defaultQuality: planState\.plan === "pro" \? "medium" : "low"/);
+    assert.match(route, /defaultSize: "auto"/);
     assert.match(route, /passCount: 1/);
     assert.match(route, /maxRetries: 0/);
+    assert.match(route, /n:\s*1/);
     assert.match(route, /OpenAI image call started/);
     assert.match(route, /Supabase upload started/);
     assert.doesNotMatch(route, /tidyBytes/);
     assert.doesNotMatch(route, /openai\.chat\.completions\.create/);
     assert.doesNotMatch(route, /fallbackModel/);
-    assert.match(demoRoute, /getConfiguredImageQuality\("low"\)/);
-    assert.match(demoRoute, /getConfiguredImageSize\("auto"\)/);
+    assert.match(demoRoute, /budgetTier: args\.budgetTier/);
+    assert.match(demoRoute, /defaultQuality: "low"/);
+    assert.match(demoRoute, /defaultSize: "auto"/);
     assert.match(demoRoute, /formData\.append\("quality", args\.quality\)/);
+    assert.match(demoRoute, /formData\.append\("n", "1"\)/);
     assert.doesNotMatch(demoRoute, /fallbackModel/);
   });
 
@@ -180,12 +190,12 @@ describe("route smoke checks", () => {
     const demoResult = read("src/app/demo/result/[token]/page.tsx");
 
     assert.match(newPage, /generateSubmitRef\.current = true/);
-    assert.match(newPage, /disabled=\{busy \|\| !!generationJob \|\| !canContinue\}/);
-    assert.match(newPage, /onRetry=\{resetFailedGeneration\}/);
+    assert.match(newPage, /disabled=\{busy \|\| !canContinue\}/);
+    assert.match(newPage, /router\.replace\(resultUrl\)/);
     assert.match(newPage, /setRoomId\(null\)/);
     assert.match(demoPage, /submitRef\.current = true/);
-    assert.match(demoPage, /disabled=\{busy \|\| !!generationJob\}/);
-    assert.match(demoPage, /onRetry=\{resetFailedGeneration\}/);
+    assert.match(demoPage, /disabled=\{busy\}/);
+    assert.match(demoPage, /router\.replace\(resultUrl\)/);
     assert.match(overlay, /fixed inset-0 z-\[100\]/);
     assert.match(overlay, /Studying your room/);
     assert.match(overlay, /Keeping your layout realistic/);
@@ -208,15 +218,15 @@ describe("route smoke checks", () => {
     const demoRoute = read("src/app/api/demo/generate/route.ts");
     const prompts = read("lib/cozylogic/prompts.ts");
     const inventory = read("lib/cozylogic/inventoryPrompt.ts");
-    const generationLanguage = `${route}\n${demoRoute}\n${prompts}\n${inventory}`;
+    const freeFix = read("lib/cozylogic/freeFixPrompt.ts");
+    const generationLanguage = `${route}\n${demoRoute}\n${prompts}\n${inventory}\n${freeFix}`;
 
     assert.doesNotMatch(generationLanguage, /MAGAZINE-WORTHY/i);
     assert.doesNotMatch(generationLanguage, /full redesign/i);
     assert.doesNotMatch(generationLanguage, /AT LEAST 8/i);
     assert.doesNotMatch(generationLanguage, /At least TWO major items/i);
     assert.doesNotMatch(generationLanguage, /stronger transformation/i);
-    assert.match(route, /Return exactly ONE realistic "AFTER" image/);
-    assert.match(demoRoute, /Return exactly one realistic AFTER image/);
+    assert.match(freeFix, /Return exactly ONE realistic photorealistic AFTER image/);
     assert.match(generationLanguage, /walls, windows, doors/);
     assert.match(generationLanguage, /same camera angle/i);
     assert.match(generationLanguage, /If a TV is present/);
@@ -227,8 +237,8 @@ describe("route smoke checks", () => {
     assert.match(inventory, /Do NOT add any new furniture/);
     assert.match(inventory, /Do NOT remove, hide, crop out/);
     assert.match(inventory, /Do NOT add decor unless that exact decor is already visible/);
-    assert.match(route, /STRICT_INVENTORY_PRESERVATION_RULES/);
-    assert.match(demoRoute, /STRICT_INVENTORY_PRESERVATION_RULES/);
+    assert.match(route, /buildFreeFixImagePrompt/);
+    assert.match(demoRoute, /buildFreeFixImagePrompt/);
   });
 
   it("keeps signed uploads scoped to the authenticated user's path", () => {
@@ -257,7 +267,8 @@ describe("route smoke checks", () => {
     assert.match(demoPage, /if \(uploadError\)/);
     assert.match(demoPage, /storage_upload_failed/);
     assert.match(newPage, /generation job/);
-    assert.match(newPage, /if \(!res\.ok\) \{[\s\S]*setRoomId\(null\)/);
+    assert.match(newPage, /retryableWithExistingDraft/);
+    assert.match(newPage, /if \(!retryableWithExistingDraft\) setRoomId\(null\)/);
     assert.match(demoRoute, /generation_job_creation_failed/);
     assert.match(generateRoute, /generation_job_creation_failed/);
     assert.match(demoRoute, /generation job creation started/);

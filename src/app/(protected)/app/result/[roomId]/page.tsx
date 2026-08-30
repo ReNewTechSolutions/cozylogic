@@ -11,6 +11,7 @@ import {
 import GenerationOverlay from "@/components/GenerationOverlay";
 import ResultMissionBoard from "@/components/ResultMissionBoard";
 import ShopThisLook from "@/components/ShopThisLook";
+import UseWhatYouHave from "@/components/UseWhatYouHave";
 
 type PageProps = {
   params: Promise<{ roomId: string }>;
@@ -242,13 +243,17 @@ export default async function ResultPage({ params }: PageProps) {
           />
         ) : null}
 
-        {outputUrl ? (
+        {outputUrl && room.budget_tier !== "rearrange_only" ? (
           <ShopThisLook
             roomType={room.room_type}
             goal={room.goal}
             styleKey={room.style_key}
             budgetTier={room.budget_tier}
           />
+        ) : null}
+
+        {outputUrl && room.budget_tier === "rearrange_only" ? (
+          <UseWhatYouHave roomType={room.room_type} />
         ) : null}
       </div>
     </main>

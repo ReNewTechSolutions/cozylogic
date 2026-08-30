@@ -1,0 +1,89 @@
+{
+  "capturedAt": "2026-08-29",
+  "schema": "public",
+  "tables": {
+    "rooms": {
+      "columns": [
+        "id",
+        "user_id",
+        "room_type",
+        "goal",
+        "style_key",
+        "budget_tier",
+        "input_image_path",
+        "input_image_width",
+        "input_image_height",
+        "status",
+        "created_at",
+        "deleted_at",
+        "latest_generation_id",
+        "generation_status",
+        "generation_step",
+        "generation_error",
+        "mode",
+        "strength"
+      ],
+      "statusCheck": ["draft", "generating", "generated", "failed"],
+      "roomTypeCheck": ["living_room", "bedroom", "dining_room", "office", "small_space", "other"],
+      "goalCheck": ["cozier", "brighter", "modern", "bigger", "refresh_budget"],
+      "styleKeyCheck": ["modern_minimal", "cozy_neutral", "scandinavian", "japandi", "soft_boho", "clean_traditional"],
+      "budgetTierCheck": ["rearrange_only", "under_500", "500_1500", "1500_3000", "3000_plus"],
+      "strengthRange": [0, 100]
+    },
+    "guest_trials": {
+      "columns": [
+        "id",
+        "trial_token",
+        "input_image_path",
+        "output_image_path",
+        "room_type",
+        "goal",
+        "style_key",
+        "budget_tier",
+        "mode",
+        "strength",
+        "status",
+        "generation_status",
+        "generation_error",
+        "created_at",
+        "expires_at"
+      ],
+      "statusCheck": null,
+      "trialTokenUnique": true
+    },
+    "generations": {
+      "columns": [
+        "id",
+        "room_id",
+        "user_id",
+        "provider",
+        "prompt_version",
+        "output_image_path",
+        "watermarked",
+        "explanation",
+        "recommendation_set_id",
+        "created_at",
+        "deleted_at",
+        "output_deleted_at",
+        "hard_deleted_at",
+        "organizer_recs_json",
+        "organizer_recs_raw"
+      ]
+    },
+    "profiles": {
+      "columns": [
+        "id",
+        "email",
+        "plan",
+        "monthly_generation_limit",
+        "monthly_generations_used",
+        "usage_reset_at",
+        "created_at",
+        "updated_at",
+        "saved_generation_limit",
+        "storage_limit_mb"
+      ],
+      "planCheck": ["free", "pro"]
+    }
+  }
+}

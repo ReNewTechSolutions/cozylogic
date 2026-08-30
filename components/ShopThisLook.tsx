@@ -257,6 +257,8 @@ export default function ShopThisLook({
   styleKey: string;
   budgetTier: string;
 }) {
+  if (budgetTier === "rearrange_only") return null;
+
   const suggestions = buildSuggestions({
     roomType,
     goal,

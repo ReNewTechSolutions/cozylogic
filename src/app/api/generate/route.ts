@@ -23,13 +23,12 @@ import {
 import { devBypassLimits } from "@/lib/cozylogic/dev";
 import { pruneUserGenerations } from "@/lib/cozylogic/prune";
 import {
-  getConfiguredImageModel,
-  getConfiguredImageQuality,
-  getConfiguredImageSize,
+  getConfiguredImageGeneration,
   type ImageQuality,
   type ImageSize,
 } from "@/lib/cozylogic/generationConfig";
-import { STRICT_INVENTORY_PRESERVATION_RULES } from "@/lib/cozylogic/inventoryPrompt";
+import { buildFreeFixImagePrompt } from "@/lib/cozylogic/freeFixPrompt";
+import { getImageEditInputFidelity } from "@/lib/cozylogic/imageEditPolicy";
 import {
   getRequestId,
   logServerEvent,
@@ -40,8 +39,6 @@ import {
   hasMatchingImageSignature,
   MAX_IMAGE_UPLOAD_BYTES,
 } from "@/lib/cozylogic/uploads";
-
-type InputFidelity = "high" | "low";
 
 type RoomRow = {
   id: string;
@@ -93,10 +90,6 @@ function extFromMime(mime: string) {
   if (mime === "image/png") return "png";
   if (mime === "image/webp") return "webp";
   return "jpg";
-}
-
-function supportsInputFidelity(model: string) {
-  return model === "gpt-image-1";
 }
 
 function buildRoomGenerationKey(userId: string, room: RoomRow) {
@@ -151,11 +144,6 @@ async function findExistingMatchingRoom(supabase: any, userId: string, room: Roo
   return data as { id: string; status: string | null; generation_status: string | null } | null;
 }
 
-function chooseInputFidelity(budgetTier: string): InputFidelity {
-  if (budgetTier === "rearrange_only") return "high";
-  return "low";
-}
-
 function styleKit(style_key: string) {
   switch (style_key) {
     case "soft_boho":
@@ -192,44 +180,6 @@ Style kit (Modern Minimal):
     default:
       return "";
   }
-}
-
-function buildRearrangeOnlyPrompt(room: {
-  room_type: string;
-  goal: string;
-  style_key: string;
-  budget_tier: string;
-}) {
-  const style = friendlyLabel(STYLE_LABELS, room.style_key);
-
-  return `
-You are an expert home stager. Create a realistic "AFTER" photo of the SAME room.
-
-OUTPUT CONTRACT:
-- Return exactly ONE realistic "AFTER" image of this same room.
-- Do not return a collage, split screen, before/after composite, multiple views, text, labels, logos, or watermarks.
-
-${STRICT_INVENTORY_PRESERVATION_RULES}
-
-ARCHITECTURE LOCK:
-- SAME room, SAME camera angle, SAME framing.
-- Do NOT add/remove/move walls, windows, doors, openings, trim, baseboards, ceiling height.
-- Curtains/blinds must remain EXACTLY the same (same open/closed state + same coverage).
-- Do NOT change the visible outdoors brightness/view framing.
-- Do NOT change floor material or built-ins.
-- Do NOT change lens/FOV or crop.
-- If a TV is present, keep the same TV on the same wall and in the same location, orientation, and scale.
-
-ALLOWED CHANGES:
-- You MAY move/rotate/reposition existing furniture to improve flow.
-- You MAY present existing visible belongings more neatly, but do not erase them or introduce storage.
-- You MAY improve spacing, straighten existing textiles, and improve the appearance of lighting without adding fixtures.
-- Keep every major visible object visible and believable; do not make the room staged-empty.
-
-STYLE TARGET (achieve via staging only): ${style}
-- Better symmetry, negative space, and cleaner surfaces.
-- Improved arrangement of pillows/throws (but do NOT change them to new ones).
-`.trim();
 }
 
 function buildRedesignPrompt(room: {
@@ -305,7 +255,6 @@ async function editImage(opts: {
   budgetTier: string;
   quality: ImageQuality;
   size: ImageSize;
-  forceNoInputFidelity?: boolean;
 }) {
   const {
     openai,
@@ -316,7 +265,6 @@ async function editImage(opts: {
     budgetTier,
     quality,
     size,
-    forceNoInputFidelity,
   } = opts;
 
   const blob = bufferToBlob(input, inputMime, `input.${extFromMime(inputMime)}`);
@@ -328,12 +276,12 @@ async function editImage(opts: {
       image: blob,
       size,
       quality,
+      n: 1,
       output_format: "png",
     };
 
-    if (!forceNoInputFidelity && supportsInputFidelity(modelName)) {
-      params.input_fidelity = chooseInputFidelity(budgetTier);
-    }
+    const inputFidelity = getImageEditInputFidelity(modelName, budgetTier);
+    if (inputFidelity) params.input_fidelity = inputFidelity;
 
     const img = await openai.images.edit(params);
     const b64 = img.data?.[0]?.b64_json;
@@ -389,9 +337,11 @@ async function processRoomGeneration(opts: {
   const { room, userId, planState, didIncrement, prevUsed } = opts;
   const admin = getSupabaseAdminClient();
   const startedAt = Date.now();
-  const model = getConfiguredImageModel();
-  const quality = getConfiguredImageQuality(planState.plan === "pro" ? "medium" : "low");
-  const size = getConfiguredImageSize("auto");
+  const { model, quality, size } = getConfiguredImageGeneration({
+    budgetTier: room.budget_tier,
+    defaultQuality: planState.plan === "pro" ? "medium" : "low",
+    defaultSize: "auto",
+  });
   const outputPath = `${userId}/${randomUUID()}.png`;
   let activeStage = "generation_setup";
 
@@ -441,7 +391,12 @@ async function processRoomGeneration(opts: {
       generation_status: isRearrangeOnly ? "rearrange" : "redesign",
     });
 
-    const prompt = isRearrangeOnly ? buildRearrangeOnlyPrompt(room) : buildRedesignPrompt(room);
+    const prompt = isRearrangeOnly
+      ? buildFreeFixImagePrompt({
+          roomTypeLabel: friendlyLabel(ROOM_LABELS, room.room_type),
+          styleLabel: friendlyLabel(STYLE_LABELS, room.style_key),
+        })
+      : buildRedesignPrompt(room);
 
     activeStage = "openai_call";
     logGenerationTiming("generate-job", "OpenAI image call started", startedAt, {
@@ -509,7 +464,9 @@ async function processRoomGeneration(opts: {
         room_id: room.id,
         user_id: userId,
         provider: "openai",
-        prompt_version: isRearrangeOnly ? "v6_1pass_rearrange" : "v6_1pass_redesign",
+        prompt_version: isRearrangeOnly
+          ? "v7_1pass_object_preservation"
+          : "v6_1pass_redesign",
         output_image_path: outputPath,
         watermarked,
         explanation: isRearrangeOnly
@@ -564,6 +521,10 @@ async function processRoomGeneration(opts: {
 export async function POST(req: NextRequest) {
   const requestStartedAt = Date.now();
   let requestId: string = randomUUID();
+  let routeSupabase: any = null;
+  let lockedRoomId: string | null = null;
+  let jobAccepted = false;
+  let pendingUsageRollback: { userId: string; prevUsed: number } | null = null;
   logGenerationTiming("generate", "request received", requestStartedAt, { requestId });
 
   const failure = (
@@ -584,6 +545,7 @@ export async function POST(req: NextRequest) {
   try {
     const res = NextResponse.next();
     const supabase = getSupabaseRouteClient(req, res);
+    routeSupabase = supabase;
 
     const {
       data: { user },
@@ -716,6 +678,7 @@ export async function POST(req: NextRequest) {
         roomId,
       });
     }
+    lockedRoomId = room.id;
     logGenerationTiming("generate", "generation job creation finished", requestStartedAt, {
       requestId,
       roomId: room.id,
@@ -739,6 +702,7 @@ export async function POST(req: NextRequest) {
         });
       }
       await incrementUsage(user.id, prevUsed + 1);
+      pendingUsageRollback = { userId: user.id, prevUsed };
     }
 
     const openaiKey = process.env.OPENAI_API_KEY;
@@ -774,6 +738,8 @@ export async function POST(req: NextRequest) {
         prevUsed,
       });
     });
+    jobAccepted = true;
+    pendingUsageRollback = null;
 
     logGenerationTiming("generate", "response returned", requestStartedAt, {
       requestId,
@@ -788,6 +754,26 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json(getJobResponse(room.id, idempotencyKey), { status: 202 });
   } catch (error) {
+    if (pendingUsageRollback) {
+      try {
+        await incrementUsage(
+          pendingUsageRollback.userId,
+          pendingUsageRollback.prevUsed
+        );
+      } catch {}
+    }
+    if (routeSupabase && lockedRoomId && !jobAccepted) {
+      await setRoomStep(routeSupabase, lockedRoomId, {
+        status: "draft",
+        generation_status: null,
+        generation_error: null,
+      });
+      logGenerationTiming("generate", "generation job rollback", requestStartedAt, {
+        requestId,
+        roomId: lockedRoomId,
+        status: "draft",
+      });
+    }
     return failure("generation_request_failed", "generation_request", 500, error);
   }
 }
