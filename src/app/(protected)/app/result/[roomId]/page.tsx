@@ -12,6 +12,7 @@ import GenerationOverlay from "@/components/GenerationOverlay";
 import ResultMissionBoard from "@/components/ResultMissionBoard";
 import ShopThisLook from "@/components/ShopThisLook";
 import UseWhatYouHave from "@/components/UseWhatYouHave";
+import { formatUtcDateTime } from "@/lib/cozylogic/dateFormat";
 
 type PageProps = {
   params: Promise<{ roomId: string }>;
@@ -74,19 +75,20 @@ export default async function ResultPage({ params }: PageProps) {
   let inputUrl: string | null = null;
   let outputUrl: string | null = null;
 
-  if (room.input_image_path) {
-    const { data } = await supabase.storage
-      .from(STORAGE_BUCKET_INPUTS)
-      .createSignedUrl(room.input_image_path, signedTtl);
-    inputUrl = data?.signedUrl ?? null;
-  }
-
-  if (gen?.output_image_path) {
-    const { data } = await supabase.storage
-      .from(STORAGE_BUCKET_OUTPUTS)
-      .createSignedUrl(gen.output_image_path, signedTtl);
-    outputUrl = data?.signedUrl ?? null;
-  }
+  const [inputSignedUrl, outputSignedUrl] = await Promise.all([
+    room.input_image_path
+      ? supabase.storage
+          .from(STORAGE_BUCKET_INPUTS)
+          .createSignedUrl(room.input_image_path, signedTtl)
+      : Promise.resolve({ data: null }),
+    gen?.output_image_path
+      ? supabase.storage
+          .from(STORAGE_BUCKET_OUTPUTS)
+          .createSignedUrl(gen.output_image_path, signedTtl)
+      : Promise.resolve({ data: null }),
+  ]);
+  inputUrl = inputSignedUrl.data?.signedUrl ?? null;
+  outputUrl = outputSignedUrl.data?.signedUrl ?? null;
 
   const status = room.status ?? "";
   const step = room.generation_status ?? "";
@@ -180,7 +182,14 @@ export default async function ResultPage({ params }: PageProps) {
               <div className="relative aspect-[3/2] overflow-hidden rounded-lg bg-[#EDE2D2]">
                 {inputUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={inputUrl} alt="Before" className="h-full w-full object-cover" />
+                  <img
+                    src={inputUrl}
+                    alt="Before"
+                    width={1200}
+                    height={800}
+                    decoding="async"
+                    className="h-full w-full object-cover"
+                  />
                 ) : (
                   <div className="grid h-full place-items-center text-sm text-[#6A6A6A]">
                     No input image
@@ -200,7 +209,14 @@ export default async function ResultPage({ params }: PageProps) {
               <div className="relative aspect-[3/2] overflow-hidden rounded-lg bg-[#EDE2D2]">
                 {outputUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={outputUrl} alt="After" className="h-full w-full object-cover" />
+                  <img
+                    src={outputUrl}
+                    alt="After"
+                    width={1200}
+                    height={800}
+                    decoding="async"
+                    className="h-full w-full object-cover"
+                  />
                 ) : isWorking ? (
                   <div className="grid h-full place-items-center p-6 text-center">
                     <div className="text-sm font-medium">Previewing…</div>
@@ -219,7 +235,10 @@ export default async function ResultPage({ params }: PageProps) {
               {outputUrl ? (
                 <div className="mt-3 flex items-center justify-between">
                   <div className="text-xs text-[#6A5A49]">
-                    Generated {gen?.created_at ? new Date(gen.created_at).toLocaleString() : ""}
+                    Generated{" "}
+                    <time dateTime={gen?.created_at}>
+                      {formatUtcDateTime(gen?.created_at)}
+                    </time>
                   </div>
                   <a
                     href={outputUrl}

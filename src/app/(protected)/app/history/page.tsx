@@ -32,12 +32,13 @@ export default async function HistoryPage() {
     `
     )
     .eq("user_id", user.id)
+    .is("deleted_at", null)
     .order("created_at", { ascending: false })
     .limit(60);
 
   const items: RecentCard[] =
     (rows ?? [])
-      .filter((g: any) => !!g.room)
+      .filter((g: any) => !!g.room && !!g.output_image_path)
       .map((g: any) => ({
         generation_id: g.id,
         created_at: g.created_at,

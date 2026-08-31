@@ -98,8 +98,10 @@ export default async function DemoResultPage({ params }: PageProps) {
     return <DemoRecoveryScreen />;
   }
 
-  const inputUrl = await createSignedUrl(STORAGE_BUCKET_INPUTS, trial.input_image_path);
-  const outputUrl = await createSignedUrl(STORAGE_BUCKET_OUTPUTS, trial.output_image_path);
+  const [inputUrl, outputUrl] = await Promise.all([
+    createSignedUrl(STORAGE_BUCKET_INPUTS, trial.input_image_path),
+    createSignedUrl(STORAGE_BUCKET_OUTPUTS, trial.output_image_path),
+  ]);
   const isFailed =
     trial.status === "error" ||
     trial.status === "failed" ||
@@ -194,7 +196,14 @@ export default async function DemoResultPage({ params }: PageProps) {
               <div className="relative aspect-[3/2] overflow-hidden rounded-lg bg-[#EDE2D2]">
                 {inputUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={inputUrl} alt="Before" className="h-full w-full object-cover" />
+                  <img
+                    src={inputUrl}
+                    alt="Before"
+                    width={1200}
+                    height={800}
+                    decoding="async"
+                    className="h-full w-full object-cover"
+                  />
                 ) : (
                   <div className="grid h-full place-items-center text-sm text-[#6A6A6A]">
                     No input image
@@ -214,7 +223,14 @@ export default async function DemoResultPage({ params }: PageProps) {
               <div className="relative aspect-[3/2] overflow-hidden rounded-lg bg-[#EDE2D2]">
                 {outputUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={outputUrl} alt="After" className="h-full w-full object-cover" />
+                  <img
+                    src={outputUrl}
+                    alt="After"
+                    width={1200}
+                    height={800}
+                    decoding="async"
+                    className="h-full w-full object-cover"
+                  />
                 ) : isWorking ? (
                   <div className="grid h-full place-items-center p-6 text-center">
                     <div className="text-sm font-medium">Previewing…</div>

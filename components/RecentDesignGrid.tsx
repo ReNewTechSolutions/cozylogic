@@ -4,7 +4,8 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
-import { getSignedUrl } from "@/lib/cozylogic/images";
+import { formatUtcDate } from "@/lib/cozylogic/dateFormat";
+import { getSignedUrls } from "@/lib/cozylogic/images";
 import {
   STORAGE_BUCKET_INPUTS,
   STORAGE_BUCKET_OUTPUTS,
@@ -42,8 +43,6 @@ export default function RecentDesignGrid({ items }: { items: RecentCard[] }) {
   const [beforeMap, setBeforeMap] = useState<Record<string, string>>({});
   const [afterMap, setAfterMap] = useState<Record<string, string>>({});
 
-  const ids = useMemo(() => items.map((i) => i.generation_id), [items]);
-
   useEffect(() => {
     let cancelled = false;
 
@@ -51,31 +50,31 @@ export default function RecentDesignGrid({ items }: { items: RecentCard[] }) {
       const nextBefore: Record<string, string> = {};
       const nextAfter: Record<string, string> = {};
 
-      await Promise.all(
-        items.map(async (item) => {
-          try {
-            const before = await getSignedUrl(
-              supabase,
-              STORAGE_BUCKET_INPUTS,
-              item.room.input_image_path
-            );
-            nextBefore[item.generation_id] = before;
-          } catch (e) {
-            console.error("RECENT before signed URL failed", item.generation_id, e);
-          }
+      const [beforeByPath, afterByPath] = await Promise.all([
+        getSignedUrls(
+          supabase,
+          STORAGE_BUCKET_INPUTS,
+          items.map((item) => item.room.input_image_path)
+        ).catch((error) => {
+          console.error("RECENT before signed URLs failed", error);
+          return {};
+        }),
+        getSignedUrls(
+          supabase,
+          STORAGE_BUCKET_OUTPUTS,
+          items.map((item) => item.output_image_path)
+        ).catch((error) => {
+          console.error("RECENT after signed URLs failed", error);
+          return {};
+        }),
+      ]);
 
-          try {
-            const after = await getSignedUrl(
-              supabase,
-              STORAGE_BUCKET_OUTPUTS,
-              item.output_image_path
-            );
-            nextAfter[item.generation_id] = after;
-          } catch (e) {
-            console.error("RECENT after signed URL failed", item.generation_id, e);
-          }
-        })
-      );
+      for (const item of items) {
+        const before = beforeByPath[item.room.input_image_path];
+        const after = afterByPath[item.output_image_path];
+        if (before) nextBefore[item.generation_id] = before;
+        if (after) nextAfter[item.generation_id] = after;
+      }
 
       if (!cancelled) {
         setBeforeMap(nextBefore);
@@ -93,7 +92,7 @@ export default function RecentDesignGrid({ items }: { items: RecentCard[] }) {
     return () => {
       cancelled = true;
     };
-  }, [ids.join("|"), items, supabase]);
+  }, [items, supabase]);
 
   return (
     <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -111,7 +110,15 @@ export default function RecentDesignGrid({ items }: { items: RecentCard[] }) {
               <div className="aspect-[4/3] overflow-hidden rounded-xl border border-[#EAEAEA] bg-[#FAF9F7]">
                 {before ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={before} alt="Before" className="h-full w-full object-cover" />
+                  <img
+                    src={before}
+                    alt="Before"
+                    width={400}
+                    height={300}
+                    loading="lazy"
+                    decoding="async"
+                    className="h-full w-full object-cover"
+                  />
                 ) : (
                   <div className="flex h-full items-center justify-center text-[11px] text-[#6A6A6A]">
                     Before
@@ -121,7 +128,15 @@ export default function RecentDesignGrid({ items }: { items: RecentCard[] }) {
               <div className="aspect-[4/3] overflow-hidden rounded-xl border border-[#EAEAEA] bg-[#FAF9F7]">
                 {after ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={after} alt="After" className="h-full w-full object-cover" />
+                  <img
+                    src={after}
+                    alt="After"
+                    width={400}
+                    height={300}
+                    loading="lazy"
+                    decoding="async"
+                    className="h-full w-full object-cover"
+                  />
                 ) : (
                   <div className="flex h-full items-center justify-center text-[11px] text-[#6A6A6A]">
                     After
@@ -142,7 +157,7 @@ export default function RecentDesignGrid({ items }: { items: RecentCard[] }) {
             </div>
 
             <div className="mt-2 flex items-center justify-between text-xs text-[#6A6A6A]">
-              <span>{new Date(item.created_at).toLocaleDateString()}</span>
+              <time dateTime={item.created_at}>{formatUtcDate(item.created_at)}</time>
               {item.watermarked ? (
                 <span className="rounded-full border border-[#EAEAEA] bg-[#FAF9F7] px-2 py-0.5 text-[11px]">
                   Free

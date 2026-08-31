@@ -1,7 +1,7 @@
 // components/GenerationOverlay.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FLOW_ERROR_MESSAGES } from "@/lib/cozylogic/flowErrors";
 
@@ -68,7 +68,7 @@ export default function GenerationOverlay({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const finishedRef = useRef(false);
 
-  const stage = useMemo(() => getStage(progress), [progress]);
+  const stage = getStage(progress);
   const pollUrl = statusUrl ?? (roomId ? `/api/rooms/${roomId}/status` : null);
 
   useEffect(() => {
@@ -91,6 +91,8 @@ export default function GenerationOverlay({
     if (!visible || finishedRef.current || error || !pollUrl) return;
 
     let cancelled = false;
+    let pollInterval: number | null = null;
+    let refreshTimeout: number | null = null;
 
     async function poll() {
       try {
@@ -138,10 +140,11 @@ export default function GenerationOverlay({
 
         if (isDone) {
           finishedRef.current = true;
+          if (pollInterval !== null) window.clearInterval(pollInterval);
           setProgress(100);
           setIsRefreshing(true);
 
-          window.setTimeout(() => {
+          refreshTimeout = window.setTimeout(() => {
             setVisible(false);
             if (redirectTo) {
               router.replace(redirectTo);
@@ -158,11 +161,12 @@ export default function GenerationOverlay({
     }
 
     void poll();
-    const interval = window.setInterval(poll, 2500);
+    pollInterval = window.setInterval(poll, 2500);
 
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
+      if (pollInterval !== null) window.clearInterval(pollInterval);
+      if (refreshTimeout !== null) window.clearTimeout(refreshTimeout);
     };
   }, [error, pollUrl, redirectTo, router, visible]);
 

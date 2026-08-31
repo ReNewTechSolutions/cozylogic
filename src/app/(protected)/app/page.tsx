@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import RecentDesignGrid, { type RecentCard } from "@/components/RecentDesignGrid";
+import { formatUtcDate } from "@/lib/cozylogic/dateFormat";
 
 export default async function DashboardPage() {
   const supabase = await getSupabaseServerClient();
@@ -62,9 +63,7 @@ export default async function DashboardPage() {
   const plan = profile?.plan ?? "free";
   const used = profile?.monthly_generations_used ?? 0;
   const limit = profile?.monthly_generation_limit ?? (plan === "pro" ? null : 1);
-  const resetAt = profile?.usage_reset_at
-    ? new Date(profile.usage_reset_at).toLocaleDateString()
-    : null;
+  const resetAt = formatUtcDate(profile?.usage_reset_at);
 
   return (
     <main className="min-h-screen bg-[#FAF9F7] text-[#1F1F1F]">
@@ -111,7 +110,11 @@ export default async function DashboardPage() {
             <div className="mt-1 text-2xl font-semibold">
               {limit === null ? `${used} used` : `${used} / ${limit}`}
             </div>
-            {resetAt ? <div className="mt-1 text-xs text-[#6A6A6A]">Resets {resetAt}</div> : null}
+            {resetAt ? (
+              <div className="mt-1 text-xs text-[#6A6A6A]">
+                Resets <time dateTime={profile?.usage_reset_at}>{resetAt}</time>
+              </div>
+            ) : null}
           </div>
 
           <div className="rounded-2xl border border-[#EAEAEA] bg-white p-5 shadow-sm">

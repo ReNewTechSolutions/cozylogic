@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import SignOutButton from "@/components/SignOutButton";
+import { formatUtcDate } from "@/lib/cozylogic/dateFormat";
 
 export default async function AccountPage() {
   const supabase = await getSupabaseServerClient();
@@ -21,7 +22,7 @@ export default async function AccountPage() {
   const plan = profile?.plan ?? "free";
   const used = profile?.monthly_generations_used ?? 0;
   const limit = profile?.monthly_generation_limit ?? null;
-  const resetAt = profile?.usage_reset_at ? new Date(profile.usage_reset_at) : null;
+  const resetAt = formatUtcDate(profile?.usage_reset_at);
 
   return (
     <main className="min-h-screen bg-[#FAF9F7] text-[#1F1F1F]">
@@ -56,11 +57,11 @@ export default async function AccountPage() {
               {limit === null ? `${used} used` : `${used} / ${limit}`}
             </div>
 
-            {resetAt && (
+            {resetAt ? (
               <div className="mt-2 text-xs text-[#6A6A6A]">
-                Usage resets: {resetAt.toLocaleDateString()}
+                Usage resets: <time dateTime={profile?.usage_reset_at}>{resetAt}</time>
               </div>
-            )}
+            ) : null}
           </div>
 
           <div className="rounded-2xl border border-[#EAEAEA] bg-white p-6 shadow-sm">
