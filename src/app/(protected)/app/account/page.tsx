@@ -38,7 +38,7 @@ export default async function AccountPage() {
 
           <Link
             href="/app"
-            className="rounded-xl border border-[#EAEAEA] bg-white px-4 py-2 text-sm font-medium shadow-sm"
+            className="inline-flex min-h-[44px] items-center justify-center rounded-xl border border-[#EAEAEA] bg-white px-4 py-2 text-sm font-medium shadow-sm"
           >
             Dashboard
           </Link>

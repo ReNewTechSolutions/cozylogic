@@ -62,7 +62,18 @@ export function logServerEvent(
   event: string,
   details: Record<string, unknown> = {}
 ) {
-  console.info(`[CozyLogic ${scope}]`, sanitize({ event, ...details }));
+  console.info(
+    JSON.stringify(
+      sanitize({
+        service: "cozylogic",
+        timestamp: new Date().toISOString(),
+        level: "info",
+        scope,
+        event,
+        ...details,
+      })
+    )
+  );
 }
 
 export function logServerFailure(
@@ -72,7 +83,17 @@ export function logServerFailure(
   details: Record<string, unknown> = {}
 ) {
   console.error(
-    `[CozyLogic ${scope}]`,
-    sanitize({ event: "final_failure", stage, ...details, error: safeErrorDetails(error) })
+    JSON.stringify(
+      sanitize({
+        service: "cozylogic",
+        timestamp: new Date().toISOString(),
+        level: "error",
+        scope,
+        event: "final_failure",
+        stage,
+        ...details,
+        error: safeErrorDetails(error),
+      })
+    )
   );
 }

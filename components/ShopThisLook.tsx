@@ -8,6 +8,7 @@ import {
   STYLE_LABELS,
   STYLES,
 } from "@/lib/cozylogic/constants";
+import TrackedAffiliateLink from "@/components/TrackedAffiliateLink";
 
 type RoomType = (typeof ROOM_TYPES)[number];
 type GoalKey = (typeof GOALS)[number];
@@ -292,11 +293,11 @@ export default function ShopThisLook({
 
       <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {suggestions.map((item) => (
-          <a
+          <TrackedAffiliateLink
             key={`${item.title}-${item.query}`}
             href={buildAmazonSearchUrl(item.query)}
-            target="_blank"
-            rel="nofollow sponsored noopener noreferrer"
+            budgetTier={budgetTier}
+            roomType={roomType}
             className="relative min-h-[150px] rounded-lg border border-[#D8C7AE] bg-[#FFFDF7] p-4 text-left shadow-sm transition-transform hover:-translate-y-[1px]"
           >
             <span
@@ -310,7 +311,7 @@ export default function ShopThisLook({
               </div>
             </div>
             <div className="mt-3 text-sm leading-6 text-[#6A5A49]">{item.reason}</div>
-          </a>
+          </TrackedAffiliateLink>
         ))}
       </div>
 

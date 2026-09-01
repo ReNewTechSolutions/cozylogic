@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { PRODUCT_EVENTS } from "@/lib/cozylogic/productEventNames";
+import { trackServerProductEvent } from "@/lib/cozylogic/productEventsServer";
 
 function getSafeNextPath(value: string | null) {
   if (!value || !value.startsWith("/") || value.startsWith("//")) {
@@ -46,7 +48,20 @@ export async function GET(request: Request) {
   );
 
   if (code) {
-    await supabase.auth.exchangeCodeForSession(code);
+    const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+    const createdAt = data.user?.created_at ? Date.parse(data.user.created_at) : Number.NaN;
+    const lastSignInAt = data.user?.last_sign_in_at
+      ? Date.parse(data.user.last_sign_in_at)
+      : Number.NaN;
+
+    if (!error && Number.isFinite(createdAt) && Number.isFinite(lastSignInAt)) {
+      const isNewAccount = Math.abs(lastSignInAt - createdAt) <= 5 * 60 * 1000;
+      if (isNewAccount) {
+        await trackServerProductEvent(PRODUCT_EVENTS.accountCreated, {
+          method: "magic_link",
+        });
+      }
+    }
   }
 
   return response;

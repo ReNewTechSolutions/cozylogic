@@ -110,6 +110,13 @@ export async function PATCH(req: NextRequest) {
     if (body?.uploadId !== session.uploadId) throw new Error("guest_session_invalid");
 
     const status = body?.status;
+    const durationMs =
+      typeof body?.durationMs === "number" &&
+      Number.isFinite(body.durationMs) &&
+      body.durationMs >= 0 &&
+      body.durationMs <= 10 * 60 * 1000
+        ? Math.round(body.durationMs)
+        : undefined;
     if (!["started", "succeeded", "failed"].includes(status)) {
       throw new Error("invalid_request");
     }
@@ -136,6 +143,7 @@ export async function PATCH(req: NextRequest) {
         uploadId: session.uploadId,
         stage: "storage_upload",
         status,
+        durationMs,
       });
       if (status === "failed") {
         logServerFailure("demo-upload", "storage_upload", new Error("storage_upload_failed"), {

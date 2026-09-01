@@ -37,7 +37,7 @@ describe("route smoke checks", () => {
     const result = read("src/app/(protected)/app/result/[roomId]/page.tsx");
 
     assert.match(result, /export default async function ResultPage/);
-    assert.match(result, /const \{ roomId \} = await params/);
+    assert.match(result, /await Promise\.all\(\[params, searchParams\]\)/);
     assert.match(result, /<GenerationOverlay/);
     assert.match(result, /roomId=\{room\.id\}/);
     assert.match(result, /href="\/app"/);
@@ -128,6 +128,7 @@ describe("route smoke checks", () => {
   it("adds optional affiliate shopping links to result pages", () => {
     const envExample = read(".env.example");
     const shop = read("components/ShopThisLook.tsx");
+    const trackedLink = read("components/TrackedAffiliateLink.tsx");
     const result = read("src/app/(protected)/app/result/[roomId]/page.tsx");
     const demoResult = read("src/app/demo/result/[token]/page.tsx");
 
@@ -140,7 +141,8 @@ describe("route smoke checks", () => {
     assert.match(shop, /process\.env\.AMAZON_ASSOCIATE_TAG/);
     assert.match(shop, /https:\/\/www\.amazon\.com\/s\?/);
     assert.match(shop, /As an Amazon Associate, CozyLogic may earn from qualifying purchases\./);
-    assert.match(shop, /rel="nofollow sponsored noopener noreferrer"/);
+    assert.match(trackedLink, /rel="nofollow sponsored noopener noreferrer"/);
+    assert.match(trackedLink, /amazonAffiliateClicked/);
     assert.doesNotMatch(result, /organizer_recs_json/);
     assert.doesNotMatch(result, /recommendations=\{/);
     assert.match(result, /<ShopThisLook/);
@@ -164,8 +166,10 @@ describe("route smoke checks", () => {
     assert.match(config, /getConfiguredImageSize/);
     assert.match(config, /getConfiguredImageGeneration/);
     assert.match(route, /budgetTier: room\.budget_tier/);
-    assert.match(route, /defaultQuality: planState\.plan === "pro" \? "medium" : "low"/);
-    assert.match(route, /defaultSize: "auto"/);
+    assert.match(route, /let quality: ImageQuality = planState\.plan === "pro" \? "medium" : "low"/);
+    assert.match(route, /defaultQuality: quality/);
+    assert.match(route, /let size: ImageSize = "auto"/);
+    assert.match(route, /defaultSize: size/);
     assert.match(route, /passCount: 1/);
     assert.match(route, /maxRetries: 0/);
     assert.match(route, /n:\s*1/);

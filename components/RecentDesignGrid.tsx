@@ -103,7 +103,7 @@ export default function RecentDesignGrid({ items }: { items: RecentCard[] }) {
         return (
           <Link
             key={item.generation_id}
-            href={`/app/result/${item.room.id}`}
+            href={`/app/result/${item.room.id}?source=saved`}
             className="group rounded-2xl border border-[#EAEAEA] bg-white p-4 shadow-sm transition-transform hover:-translate-y-[1px]"
           >
             <div className="grid grid-cols-2 gap-2">

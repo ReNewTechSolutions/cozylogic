@@ -1,9 +1,10 @@
 // components/GenerationOverlay.tsx
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FLOW_ERROR_MESSAGES } from "@/lib/cozylogic/flowErrors";
+import { PRODUCT_EVENTS, trackProductEvent } from "@/lib/cozylogic/productEvents";
 
 type Props = {
   roomId?: string;
@@ -13,6 +14,10 @@ type Props = {
   onDismiss?: () => void;
   retryHref?: string;
   retryLabel?: string;
+  analytics?: {
+    audience: "guest" | "authenticated";
+    budgetTier: string;
+  };
 };
 
 type StatusResponse = {
@@ -58,6 +63,7 @@ export default function GenerationOverlay({
   onDismiss,
   retryHref,
   retryLabel = "Try again",
+  analytics,
 }: Props) {
   const router = useRouter();
   const [visible, setVisible] = useState(true);
@@ -67,9 +73,25 @@ export default function GenerationOverlay({
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const finishedRef = useRef(false);
+  const telemetryRef = useRef(false);
+  const analyticsRef = useRef(analytics);
 
   const stage = getStage(progress);
   const pollUrl = statusUrl ?? (roomId ? `/api/rooms/${roomId}/status` : null);
+
+  const trackTerminalState = useCallback((success: boolean, stage: string) => {
+    const eventContext = analyticsRef.current;
+    if (telemetryRef.current || !eventContext) return;
+    telemetryRef.current = true;
+    trackProductEvent(
+      success ? PRODUCT_EVENTS.generationCompleted : PRODUCT_EVENTS.generationFailed,
+      {
+        audience: eventContext.audience,
+        budget_tier: eventContext.budgetTier,
+        stage,
+      }
+    );
+  }, []);
 
   useEffect(() => {
     if (!visible || finishedRef.current || error) return;
@@ -106,6 +128,7 @@ export default function GenerationOverlay({
         if (cancelled) return;
 
         if (!res.ok) {
+          trackTerminalState(false, "polling");
           setError(friendlyGenerationError(json?.error ?? "Unable to check generation status."));
           return;
         }
@@ -118,6 +141,7 @@ export default function GenerationOverlay({
         setServerStep(nextStep);
 
         if (nextError) {
+          trackTerminalState(false, nextStep || "generation");
           setError(friendlyGenerationError(nextError));
           return;
         }
@@ -129,6 +153,7 @@ export default function GenerationOverlay({
           nextStep === "failed";
 
         if (isFailed) {
+          trackTerminalState(false, nextStep || nextStatus || "generation");
           setError(friendlyGenerationError());
           return;
         }
@@ -139,6 +164,7 @@ export default function GenerationOverlay({
           nextStep === "done";
 
         if (isDone) {
+          trackTerminalState(true, "completed");
           finishedRef.current = true;
           if (pollInterval !== null) window.clearInterval(pollInterval);
           setProgress(100);
@@ -155,6 +181,7 @@ export default function GenerationOverlay({
         }
       } catch {
         if (!cancelled) {
+          trackTerminalState(false, "polling_interruption");
           setError("We could not reach the preview service. Check your connection and try again.");
         }
       }
@@ -168,7 +195,7 @@ export default function GenerationOverlay({
       if (pollInterval !== null) window.clearInterval(pollInterval);
       if (refreshTimeout !== null) window.clearTimeout(refreshTimeout);
     };
-  }, [error, pollUrl, redirectTo, router, visible]);
+  }, [error, pollUrl, redirectTo, router, trackTerminalState, visible]);
 
   if (!visible) return null;
 

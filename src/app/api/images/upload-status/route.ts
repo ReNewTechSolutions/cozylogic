@@ -28,6 +28,13 @@ export async function POST(req: NextRequest) {
 
   const path = typeof body?.path === "string" ? body.path : "";
   const status = body?.status;
+  const durationMs =
+    typeof body?.durationMs === "number" &&
+    Number.isFinite(body.durationMs) &&
+    body.durationMs >= 0 &&
+    body.durationMs <= 10 * 60 * 1000
+      ? Math.round(body.durationMs)
+      : undefined;
   if (
     !isOwnedUploadPath(path, user.id) ||
     !["started", "succeeded", "failed"].includes(status)
@@ -56,6 +63,7 @@ export async function POST(req: NextRequest) {
       requestId,
       stage: "storage_upload",
       status,
+      durationMs,
     });
     if (status === "failed") {
       logServerFailure("signed-upload", "storage_upload", new Error("storage_upload_failed"), {

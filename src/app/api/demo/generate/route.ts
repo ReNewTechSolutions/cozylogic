@@ -35,6 +35,12 @@ import {
   MAX_IMAGE_UPLOAD_BYTES,
   validateImageFileMetadata,
 } from "@/lib/cozylogic/uploads";
+import { normalizeImageTokenUsage } from "@/lib/cozylogic/imageUsage";
+import {
+  logGenerationSubmissionMetric,
+  recordGenerationExecutionMetric,
+} from "@/lib/cozylogic/generationMetrics";
+import { checkDailyImageBudget } from "@/lib/cozylogic/costGuard";
 
 type RoomType = (typeof ROOM_TYPES)[number];
 type GoalKey = (typeof GOALS)[number];
@@ -241,9 +247,84 @@ async function processGuestTrial(args: {
   budgetTier: BudgetTier;
   mode: ModeKey;
   strength: number;
+  requestId: string;
+  submitToAcceptedDurationMs: number;
 }) {
   const supabase = getSupabaseAdminClient();
   const startedAt = Date.now();
+  let generationConfig: ReturnType<typeof getConfiguredImageGeneration>;
+  try {
+    generationConfig = getConfiguredImageGeneration({
+      budgetTier: args.budgetTier,
+      defaultQuality: "low",
+      defaultSize: "auto",
+    });
+  } catch (error) {
+    await updateTrial(supabase, args.trialId, {
+      status: "failed",
+      generation_status: "error",
+      generation_error: "generation_failed",
+    });
+    logServerFailure("demo-generate", "generation_configuration", error, {
+      requestId: args.requestId,
+      trialId: args.trialId,
+      elapsedMs: Date.now() - startedAt,
+    });
+    await recordGenerationExecutionMetric({
+      audience: "guest",
+      budgetTier: args.budgetTier,
+      requestId: args.requestId,
+      model: "unconfigured",
+      quality: "unknown",
+      size: "unknown",
+      success: false,
+      failureStage: "generation_configuration",
+      imageCallCount: 0,
+      submitToAcceptedDurationMs: args.submitToAcceptedDurationMs,
+      openaiGenerationDurationMs: null,
+      outputUploadDurationMs: null,
+      totalGenerationDurationMs:
+        args.submitToAcceptedDurationMs + (Date.now() - startedAt),
+      usage: null,
+    });
+    return;
+  }
+  const { model, quality, size } = generationConfig;
+  let activeStage = "generation_setup";
+  let imageCallCount: 0 | 1 = 0;
+  let openaiGenerationDurationMs: number | null = null;
+  let outputUploadDurationMs: number | null = null;
+  let usage: ReturnType<typeof normalizeImageTokenUsage> = null;
+
+  const failProcessing = async (generationError: string, error: unknown) => {
+    await updateTrial(supabase, args.trialId, {
+      status: "failed",
+      generation_status: "error",
+      generation_error: generationError,
+    });
+    logServerFailure("demo-generate", activeStage, error, {
+      requestId: args.requestId,
+      trialId: args.trialId,
+      elapsedMs: Date.now() - startedAt,
+    });
+    await recordGenerationExecutionMetric({
+      audience: "guest",
+      budgetTier: args.budgetTier,
+      requestId: args.requestId,
+      model,
+      quality,
+      size,
+      success: false,
+      failureStage: activeStage,
+      imageCallCount,
+      submitToAcceptedDurationMs: args.submitToAcceptedDurationMs,
+      openaiGenerationDurationMs,
+      outputUploadDurationMs,
+      totalGenerationDurationMs:
+        args.submitToAcceptedDurationMs + (Date.now() - startedAt),
+      usage,
+    });
+  };
 
   await updateTrial(supabase, args.trialId, {
     status: "generating",
@@ -253,15 +334,8 @@ async function processGuestTrial(args: {
 
   const apiKey = process.env.OPENAI_API_KEY ?? "";
   if (!apiKey) {
-    await updateTrial(supabase, args.trialId, {
-      status: "failed",
-      generation_status: "error",
-      generation_error: "missing_openai_key",
-    });
-    logServerFailure("demo-generate", "openai_configuration", new Error("missing_openai_key"), {
-      trialId: args.trialId,
-      elapsedMs: Date.now() - startedAt,
-    });
+    activeStage = "openai_configuration";
+    await failProcessing("missing_openai_key", new Error("missing_openai_key"));
     return;
   }
 
@@ -279,13 +353,10 @@ async function processGuestTrial(args: {
       strength: args.strength,
     });
 
-    const { model, quality, size } = getConfiguredImageGeneration({
-      budgetTier: args.budgetTier,
-      defaultQuality: "low",
-      defaultSize: "auto",
-    });
-
+    activeStage = "openai_call";
+    imageCallCount = 1;
     logDemoGenerationTiming("OpenAI image call started", startedAt, {
+      requestId: args.requestId,
       trialId: args.trialId,
       model,
       quality,
@@ -295,6 +366,7 @@ async function processGuestTrial(args: {
 
     let openAiRes: Response;
     let payload: any;
+    const openaiStartedAt = Date.now();
     try {
       openAiRes = await requestImageEdit({
         apiKey,
@@ -308,12 +380,16 @@ async function processGuestTrial(args: {
         budgetTier: args.budgetTier,
       });
       payload = await openAiRes.json().catch(() => ({} as any));
+      openaiGenerationDurationMs = Date.now() - openaiStartedAt;
+      usage = normalizeImageTokenUsage(payload?.usage);
       logDemoGenerationTiming("OpenAI image call finished", startedAt, {
+        requestId: args.requestId,
         trialId: args.trialId,
         status: openAiRes.status,
         ok: openAiRes.ok,
       });
     } catch (error: any) {
+      openaiGenerationDurationMs = Date.now() - openaiStartedAt;
       logDemoGenerationTiming("OpenAI image call finished", startedAt, {
         trialId: args.trialId,
         ok: false,
@@ -323,44 +399,32 @@ async function processGuestTrial(args: {
     }
 
     if (!openAiRes.ok) {
-      await updateTrial(supabase, args.trialId, {
-        status: "failed",
-        generation_status: "error",
-        generation_error: "openai_image_failed",
-      });
-      logServerFailure("demo-generate", "openai_call", {
-        name: "OpenAIError",
-        code: payload?.error?.code,
-        status: openAiRes.status,
-        type: payload?.error?.type,
-      }, {
-        trialId: args.trialId,
-        elapsedMs: Date.now() - startedAt,
-      });
-      return;
+      const openaiError = new Error("openai_image_failed") as Error & {
+        status?: number;
+        code?: string;
+        type?: string;
+      };
+      openaiError.status = openAiRes.status;
+      openaiError.code = payload?.error?.code;
+      openaiError.type = payload?.error?.type;
+      throw openaiError;
     }
 
     const b64 = payload?.data?.[0]?.b64_json as string | undefined;
     if (!b64) {
-      await updateTrial(supabase, args.trialId, {
-        status: "failed",
-        generation_status: "error",
-        generation_error: "openai_image_failed",
-      });
-      logServerFailure("demo-generate", "openai_response", new Error("openai_no_image_returned"), {
-        trialId: args.trialId,
-        elapsedMs: Date.now() - startedAt,
-      });
-      return;
+      throw new Error("openai_no_image_returned");
     }
 
     const outputImagePath = `guest/${args.trialId}/${randomUUID()}.png`;
     const outputBytes = Buffer.from(b64, "base64");
 
+    activeStage = "output_storage_upload";
     logDemoGenerationTiming("Supabase upload started", startedAt, {
+      requestId: args.requestId,
       trialId: args.trialId,
       outputImagePath,
     });
+    const outputUploadStartedAt = Date.now();
     const { error: outputUploadErr } = await supabase.storage
       .from(STORAGE_BUCKET_OUTPUTS)
       .upload(outputImagePath, outputBytes, {
@@ -368,18 +432,8 @@ async function processGuestTrial(args: {
         upsert: false,
       });
 
-    if (outputUploadErr) {
-      await updateTrial(supabase, args.trialId, {
-        status: "failed",
-        generation_status: "error",
-        generation_error: "output_upload_failed",
-      });
-      logServerFailure("demo-generate", "output_storage_upload", outputUploadErr, {
-        trialId: args.trialId,
-        elapsedMs: Date.now() - startedAt,
-      });
-      return;
-    }
+    outputUploadDurationMs = Date.now() - outputUploadStartedAt;
+    if (outputUploadErr) throw outputUploadErr;
     logDemoGenerationTiming("Supabase upload finished", startedAt, {
       trialId: args.trialId,
       outputImagePath,
@@ -397,19 +451,35 @@ async function processGuestTrial(args: {
       generation_error: null,
     });
     logDemoGenerationTiming("final_success", startedAt, {
+      requestId: args.requestId,
       trialId: args.trialId,
       finalStage: "generated",
     });
+    await recordGenerationExecutionMetric({
+      audience: "guest",
+      budgetTier: args.budgetTier,
+      requestId: args.requestId,
+      model,
+      quality,
+      size,
+      success: true,
+      failureStage: null,
+      imageCallCount,
+      submitToAcceptedDurationMs: args.submitToAcceptedDurationMs,
+      openaiGenerationDurationMs,
+      outputUploadDurationMs,
+      totalGenerationDurationMs:
+        args.submitToAcceptedDurationMs + (Date.now() - startedAt),
+      usage,
+    });
   } catch (error: any) {
-    await updateTrial(supabase, args.trialId, {
-      status: "failed",
-      generation_status: "error",
-      generation_error: "generation_failed",
-    });
-    logServerFailure("demo-generate", "generation_processing", error, {
-      trialId: args.trialId,
-      elapsedMs: Date.now() - startedAt,
-    });
+    const generationError =
+      activeStage === "openai_call"
+        ? "openai_image_failed"
+        : activeStage === "output_storage_upload"
+          ? "output_upload_failed"
+          : "generation_failed";
+    await failProcessing(generationError, error);
   }
 }
 
@@ -548,6 +618,13 @@ export async function POST(req: NextRequest) {
     }
 
     if (existingTrial && ACTIVE_OR_COMPLETED_TRIAL_STATUSES.includes(String(existingTrial.status))) {
+      logGenerationSubmissionMetric({
+        audience: "guest",
+        budgetTier,
+        requestId,
+        reused: true,
+        submitToAcceptedDurationMs: Date.now() - requestStartedAt,
+      });
       logDemoGenerationTiming("response returned", requestStartedAt, {
         requestId,
         trialId: existingTrial.id,
@@ -555,6 +632,37 @@ export async function POST(req: NextRequest) {
         reused: true,
       });
       return NextResponse.json(getTrialResponse(existingTrial, true), { status: 200 });
+    }
+
+    let dailyBudget;
+    try {
+      dailyBudget = await checkDailyImageBudget(supabase);
+    } catch (error) {
+      logServerFailure("demo-generate", "cost_guard", error, {
+        requestId,
+        elapsedMs: Date.now() - requestStartedAt,
+      });
+      return NextResponse.json(
+        flowErrorBody("generation_request_failed", "cost_guard", requestId),
+        { status: 503 }
+      );
+    }
+    logServerEvent("demo-generate", "cost_guard", {
+      requestId,
+      allowed: dailyBudget.allowed,
+      reservedJobs: dailyBudget.reservedJobs,
+      limit: dailyBudget.limit,
+    });
+    if (!dailyBudget.allowed) {
+      logServerFailure("demo-generate", "cost_guard", new Error("beta_daily_limit_reached"), {
+        requestId,
+        reservedJobs: dailyBudget.reservedJobs,
+        limit: dailyBudget.limit,
+      });
+      return NextResponse.json(
+        flowErrorBody("beta_daily_limit_reached", "cost_guard", requestId),
+        { status: 429 }
+      );
     }
 
     const trialId = existingTrial?.id ?? randomUUID();
@@ -602,6 +710,13 @@ export async function POST(req: NextRequest) {
         .maybeSingle();
 
       if (insertedElsewhere) {
+        logGenerationSubmissionMetric({
+          audience: "guest",
+          budgetTier,
+          requestId,
+          reused: true,
+          submitToAcceptedDurationMs: Date.now() - requestStartedAt,
+        });
         logDemoGenerationTiming("response returned", requestStartedAt, {
           requestId,
           trialId: insertedElsewhere.id,
@@ -629,6 +744,13 @@ export async function POST(req: NextRequest) {
         .eq("id", trialId)
         .maybeSingle();
       if (nowActive && ACTIVE_OR_COMPLETED_TRIAL_STATUSES.includes(String(nowActive.status))) {
+        logGenerationSubmissionMetric({
+          audience: "guest",
+          budgetTier,
+          requestId,
+          reused: true,
+          submitToAcceptedDurationMs: Date.now() - requestStartedAt,
+        });
         return NextResponse.json(getTrialResponse(nowActive, true), { status: 200 });
       }
 
@@ -651,6 +773,7 @@ export async function POST(req: NextRequest) {
       retried: Boolean(existingTrial),
     });
 
+    const submitToAcceptedDurationMs = Date.now() - requestStartedAt;
     after(async () => {
       await processGuestTrial({
         trialId,
@@ -664,7 +787,17 @@ export async function POST(req: NextRequest) {
         budgetTier,
         mode,
         strength,
+        requestId,
+        submitToAcceptedDurationMs,
       });
+    });
+
+    logGenerationSubmissionMetric({
+      audience: "guest",
+      budgetTier,
+      requestId,
+      reused: false,
+      submitToAcceptedDurationMs,
     });
 
     logDemoGenerationTiming("response returned", requestStartedAt, {

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Suspense, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
+import { PRODUCT_EVENTS, trackProductEvent } from "@/lib/cozylogic/productEvents";
 
 function LoginPageInner() {
   const searchParams = useSearchParams();
@@ -18,6 +19,7 @@ function LoginPageInner() {
 
   const onMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
+    trackProductEvent(PRODUCT_EVENTS.accountCreationStarted, { method: "magic_link" });
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -99,10 +101,10 @@ function LoginPageInner() {
         </div>
 
         <div className="mt-6 flex items-center justify-between text-sm text-[#6A6A6A]">
-          <Link href="/" className="underline">
+          <Link href="/" className="inline-flex min-h-[44px] items-center underline">
             Back to home
           </Link>
-          <Link href="/app/new" className="underline">
+          <Link href="/app/new" className="inline-flex min-h-[44px] items-center underline">
             Try the app
           </Link>
         </div>

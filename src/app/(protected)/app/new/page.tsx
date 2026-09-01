@@ -23,6 +23,7 @@ import {
   STYLES,
   STYLE_LABELS,
 } from "@/lib/cozylogic/constants";
+import { PRODUCT_EVENTS, trackProductEvent } from "@/lib/cozylogic/productEvents";
 
 type StepKey = "upload" | "style" | "budget" | "review";
 
@@ -237,6 +238,10 @@ export default function NewRedesignPage() {
         { silent: false }
       );
 
+      trackProductEvent(PRODUCT_EVENTS.generationSubmitted, {
+        audience: "authenticated",
+        budget_tier: budgetTier,
+      });
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -245,6 +250,11 @@ export default function NewRedesignPage() {
 
       const json = await res.json().catch(() => ({} as any));
       if (!res.ok) {
+        trackProductEvent(PRODUCT_EVENTS.generationFailed, {
+          audience: "authenticated",
+          budget_tier: budgetTier,
+          stage: String((json as any)?.stage || "generation_request"),
+        });
         draftRoomPromiseRef.current = null;
         const retryableWithExistingDraft = [
           "auth",
@@ -266,9 +276,19 @@ export default function NewRedesignPage() {
 
       const roomResultId = (json as any)?.roomId ?? id;
       const resultUrl = (json as any)?.resultUrl ?? `/app/result/${roomResultId}`;
+      trackProductEvent(PRODUCT_EVENTS.generationAccepted, {
+        audience: "authenticated",
+        budget_tier: budgetTier,
+        reused: Boolean((json as any)?.reused),
+      });
       shouldKeepWaiting = true;
       router.replace(resultUrl);
     } catch (e: any) {
+      trackProductEvent(PRODUCT_EVENTS.generationFailed, {
+        audience: "authenticated",
+        budget_tier: budgetTier,
+        stage: "generation_request",
+      });
       draftRoomPromiseRef.current = null;
       setError(e?.message ?? "We could not start the room preview. Please try again.");
     } finally {

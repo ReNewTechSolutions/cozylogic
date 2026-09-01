@@ -1,8 +1,11 @@
 import Link from "next/link";
+import ProductEventOnMount from "@/components/ProductEventOnMount";
+import { PRODUCT_EVENTS } from "@/lib/cozylogic/productEventNames";
 
 export default function MarketingHomePage() {
   return (
     <main className="min-h-screen bg-[#F7EFE3] text-[#1F1F1F]">
+      <ProductEventOnMount name={PRODUCT_EVENTS.homepageViewed} />
       {/* NAV */}
       <section className="border-b border-[#D8C7AE] bg-[#FFF8EA]/80 backdrop-blur">
         <div className="mx-auto flex w-full max-w-[1180px] items-center justify-between px-6 py-5">
@@ -18,13 +21,13 @@ export default function MarketingHomePage() {
           <div className="flex items-center gap-3">
             <Link
               href="/login"
-              className="rounded-lg border border-[#D8C7AE] bg-[#FFFDF7] px-4 py-2 text-sm font-medium shadow-sm"
+              className="inline-flex min-h-[44px] items-center justify-center rounded-lg border border-[#D8C7AE] bg-[#FFFDF7] px-4 py-2 text-sm font-medium shadow-sm"
             >
               Sign in
             </Link>
             <Link
               href="/demo"
-              className="rounded-lg bg-[#6F8373] px-4 py-2 text-sm font-medium text-white shadow-sm"
+              className="inline-flex min-h-[44px] items-center justify-center rounded-lg bg-[#6F8373] px-4 py-2 text-sm font-medium text-white shadow-sm"
             >
               Try free
             </Link>
@@ -53,13 +56,13 @@ export default function MarketingHomePage() {
             <div className="mt-7 flex flex-col gap-3 sm:flex-row">
               <Link
                 href="/demo"
-                className="rounded-lg bg-[#1F1F1F] px-6 py-3 text-center text-sm font-medium text-white shadow-sm"
+                className="inline-flex min-h-[44px] items-center justify-center rounded-lg bg-[#1F1F1F] px-6 py-3 text-center text-sm font-medium text-white shadow-sm"
               >
                 Try a free room preview
               </Link>
               <Link
                 href="/login"
-                className="rounded-lg border border-[#D8C7AE] bg-[#FFFDF7] px-6 py-3 text-center text-sm font-medium shadow-sm"
+                className="inline-flex min-h-[44px] items-center justify-center rounded-lg border border-[#D8C7AE] bg-[#FFFDF7] px-6 py-3 text-center text-sm font-medium shadow-sm"
               >
                 Sign in
               </Link>
@@ -142,7 +145,7 @@ export default function MarketingHomePage() {
           <div className="mt-6">
             <Link
               href="/demo"
-              className="rounded-lg bg-[#6F8373] px-6 py-3 text-sm font-medium text-white"
+              className="inline-flex min-h-[44px] items-center justify-center rounded-lg bg-[#6F8373] px-6 py-3 text-sm font-medium text-white"
             >
               Try a free room preview
             </Link>

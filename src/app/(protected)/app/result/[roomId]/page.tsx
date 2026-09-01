@@ -13,13 +13,15 @@ import ResultMissionBoard from "@/components/ResultMissionBoard";
 import ShopThisLook from "@/components/ShopThisLook";
 import UseWhatYouHave from "@/components/UseWhatYouHave";
 import { formatUtcDateTime } from "@/lib/cozylogic/dateFormat";
+import ResultViewTracker from "@/components/ResultViewTracker";
 
 type PageProps = {
   params: Promise<{ roomId: string }>;
+  searchParams: Promise<{ source?: string }>;
 };
 
-export default async function ResultPage({ params }: PageProps) {
-  const { roomId } = await params;
+export default async function ResultPage({ params, searchParams }: PageProps) {
+  const [{ roomId }, query] = await Promise.all([params, searchParams]);
 
   if (!roomId || roomId === "undefined") {
     redirect("/app");
@@ -111,11 +113,17 @@ export default async function ResultPage({ params }: PageProps) {
 
   return (
     <main className="min-h-screen bg-[#F7EFE3] text-[#1F1F1F]">
+      <ResultViewTracker
+        audience="authenticated"
+        budgetTier={room.budget_tier}
+        reopened={query.source === "saved"}
+      />
       {isWorking ? (
         <GenerationOverlay
           roomId={room.id}
           retryHref="/app/new"
           retryLabel="Try a fresh preview"
+          analytics={{ audience: "authenticated", budgetTier: room.budget_tier }}
         />
       ) : null}
 

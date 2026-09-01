@@ -7,6 +7,7 @@ import { STORAGE_BUCKET_INPUTS } from "@/lib/cozylogic/constants";
 import { readFriendlyApiError } from "@/lib/cozylogic/flowErrors";
 import { getSignedUrl } from "@/lib/cozylogic/images";
 import { validateImageFileMetadata } from "@/lib/cozylogic/uploads";
+import { PRODUCT_EVENTS, trackProductEvent } from "@/lib/cozylogic/productEvents";
 
 export default function UploadCard({
   value,
@@ -55,6 +56,7 @@ export default function UploadCard({
     path: string;
     status: "started" | "succeeded" | "failed";
     errorCode?: string;
+    durationMs?: number;
   }) {
     try {
       await fetch("/api/images/upload-status", {
@@ -73,6 +75,10 @@ export default function UploadCard({
 
     const validation = validateImageFileMetadata(file);
     if (validation.ok === false) {
+      trackProductEvent(PRODUCT_EVENTS.uploadFailed, {
+        audience: "authenticated",
+        stage: "file_validation",
+      });
       setErr(validation.message);
       return;
     }
@@ -81,6 +87,9 @@ export default function UploadCard({
     const requestId = crypto.randomUUID();
     let path = "";
     let uploadFailureReported = false;
+    let failureStage = "auth";
+    const uploadStartedAt = performance.now();
+    trackProductEvent(PRODUCT_EVENTS.uploadStarted, { audience: "authenticated" });
     try {
       const {
         data: { user },
@@ -89,11 +98,11 @@ export default function UploadCard({
 
       if (userErr) throw new Error("Your sign-in could not be verified. Sign in again and retry.");
       if (!user) {
-        setErr("Please sign in again.");
-        return;
+        throw new Error("Please sign in again.");
       }
 
       path = `${user.id}/${crypto.randomUUID()}.${validation.extension}`;
+      failureStage = "upload_preparation";
 
       const signedRes = await fetch("/api/images/signed-url", {
         method: "POST",
@@ -125,6 +134,7 @@ export default function UploadCard({
 
       await reportUploadStatus({ requestId, path, status: "started" });
 
+      failureStage = "storage_upload";
       const { error: uploadErr } = await supabase.storage
         .from(STORAGE_BUCKET_INPUTS)
         .uploadToSignedUrl(path, token, file, {
@@ -134,21 +144,37 @@ export default function UploadCard({
 
       if (uploadErr) {
         uploadFailureReported = true;
+        const durationMs = Math.round(performance.now() - uploadStartedAt);
         await reportUploadStatus({
           requestId,
           path,
           status: "failed",
           errorCode: uploadErr.name || "storage_upload_failed",
+          durationMs,
         });
         throw new Error("The photo upload did not finish. Check your connection and try again.");
       }
 
-      await reportUploadStatus({ requestId, path, status: "succeeded" });
+      const durationMs = Math.round(performance.now() - uploadStartedAt);
+      await reportUploadStatus({ requestId, path, status: "succeeded", durationMs });
+      trackProductEvent(PRODUCT_EVENTS.uploadSucceeded, {
+        audience: "authenticated",
+      });
       onChange(path);
     } catch (e: any) {
       if (path && !uploadFailureReported) {
-        await reportUploadStatus({ requestId, path, status: "failed", errorCode: "upload_failed" });
+        await reportUploadStatus({
+          requestId,
+          path,
+          status: "failed",
+          errorCode: "upload_failed",
+          durationMs: Math.round(performance.now() - uploadStartedAt),
+        });
       }
+      trackProductEvent(PRODUCT_EVENTS.uploadFailed, {
+        audience: "authenticated",
+        stage: failureStage,
+      });
       setErr(e?.message ?? "The photo upload did not finish. Please try again.");
     } finally {
       setBusy(false);

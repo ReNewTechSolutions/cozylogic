@@ -1,12 +1,17 @@
 // components/BudgetSelect.tsx
 "use client";
 
+import { useEffect, useRef } from "react";
 import {
   BUDGET_CHOICES,
   BUDGET_HELPERS,
   BUDGET_LABELS,
   BUDGET_TIERS,
 } from "@/lib/cozylogic/constants";
+import {
+  getBudgetSelectionEvent,
+  trackProductEvent,
+} from "@/lib/cozylogic/productEvents";
 
 type BudgetTier = (typeof BUDGET_TIERS)[number];
 
@@ -17,6 +22,14 @@ export default function BudgetSelect({
   value: BudgetTier | null;
   onChange: (v: BudgetTier) => void;
 }) {
+  const trackedValueRef = useRef<BudgetTier | null>(null);
+
+  useEffect(() => {
+    if (!value || trackedValueRef.current === value) return;
+    trackedValueRef.current = value;
+    trackProductEvent(getBudgetSelectionEvent(value), { budget_tier: value });
+  }, [value]);
+
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
       {BUDGET_CHOICES.map((key) => {

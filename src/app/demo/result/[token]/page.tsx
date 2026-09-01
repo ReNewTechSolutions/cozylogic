@@ -11,6 +11,7 @@ import GenerationOverlay from "@/components/GenerationOverlay";
 import ResultMissionBoard from "@/components/ResultMissionBoard";
 import ShopThisLook from "@/components/ShopThisLook";
 import UseWhatYouHave from "@/components/UseWhatYouHave";
+import ResultViewTracker from "@/components/ResultViewTracker";
 
 type PageProps = {
   params: Promise<{ token: string }>;
@@ -128,11 +129,13 @@ export default async function DemoResultPage({ params }: PageProps) {
 
   return (
     <main className="min-h-screen bg-[#F7EFE3] text-[#1F1F1F]">
+      <ResultViewTracker audience="guest" budgetTier={trial.budget_tier} reopened={false} />
       {isWorking ? (
         <GenerationOverlay
           statusUrl={`/api/demo/${encodeURIComponent(token)}/status`}
           retryHref="/demo"
           retryLabel="Try the demo again"
+          analytics={{ audience: "guest", budgetTier: trial.budget_tier }}
         />
       ) : null}
 

@@ -80,19 +80,19 @@ export default async function DashboardPage() {
           <div className="flex flex-wrap gap-3">
             <Link
               href="/app/new"
-              className="rounded-xl bg-[#6F8373] px-4 py-2 text-sm font-medium text-white shadow-sm"
+              className="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-[#6F8373] px-4 py-2 text-sm font-medium text-white shadow-sm"
             >
               New redesign
             </Link>
             <Link
               href="/app/history"
-              className="rounded-xl border border-[#EAEAEA] bg-white px-4 py-2 text-sm font-medium shadow-sm"
+              className="inline-flex min-h-[44px] items-center justify-center rounded-xl border border-[#EAEAEA] bg-white px-4 py-2 text-sm font-medium shadow-sm"
             >
               History
             </Link>
             <Link
               href="/app/account"
-              className="rounded-xl border border-[#EAEAEA] bg-white px-4 py-2 text-sm font-medium shadow-sm"
+              className="inline-flex min-h-[44px] items-center justify-center rounded-xl border border-[#EAEAEA] bg-white px-4 py-2 text-sm font-medium shadow-sm"
             >
               Account
             </Link>
@@ -130,7 +130,10 @@ export default async function DashboardPage() {
               <h2 className="text-xl font-semibold">Recent designs</h2>
               <p className="mt-1 text-sm text-[#6A6A6A]">Pick up where you left off.</p>
             </div>
-            <Link href="/app/history" className="text-sm font-medium underline">
+            <Link
+              href="/app/history"
+              className="inline-flex min-h-[44px] items-center text-sm font-medium underline"
+            >
               View all
             </Link>
           </div>
@@ -144,7 +147,7 @@ export default async function DashboardPage() {
               <div className="mt-6">
                 <Link
                   href="/app/new"
-                  className="inline-flex rounded-xl bg-[#6F8373] px-4 py-2 text-sm font-medium text-white shadow-sm"
+                  className="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-[#6F8373] px-4 py-2 text-sm font-medium text-white shadow-sm"
                 >
                   Start new redesign
                 </Link>

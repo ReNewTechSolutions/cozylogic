@@ -30,6 +30,8 @@ export const FLOW_ERROR_MESSAGES: Record<string, string> = {
   room_incomplete: "This room preview is missing a photo or choice. Start it again.",
   already_generating: "This room preview is already starting. Please wait a moment.",
   limit_reached: "You have reached this month's preview limit.",
+  beta_daily_limit_reached:
+    "CozyLogic has reached today’s small-beta preview limit. Please try again tomorrow.",
   missing_openai_key: "The image service is not configured right now. Please try again later.",
   openai_image_failed: "The image service could not finish this preview. Please try again.",
   output_upload_failed: "The preview was created, but we could not save it. Please try again.",

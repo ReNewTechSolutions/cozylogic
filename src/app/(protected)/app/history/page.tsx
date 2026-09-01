@@ -69,13 +69,13 @@ export default async function HistoryPage() {
           <div className="flex items-center gap-3">
             <Link
               href="/app"
-              className="rounded-xl border border-[#EAEAEA] bg-white px-4 py-2 text-sm font-medium shadow-sm"
+              className="inline-flex min-h-[44px] items-center justify-center rounded-xl border border-[#EAEAEA] bg-white px-4 py-2 text-sm font-medium shadow-sm"
             >
               Dashboard
             </Link>
             <Link
               href="/app/new"
-              className="rounded-xl bg-[#6F8373] px-4 py-2 text-sm font-medium text-white shadow-sm"
+              className="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-[#6F8373] px-4 py-2 text-sm font-medium text-white shadow-sm"
             >
               New redesign
             </Link>
@@ -91,7 +91,7 @@ export default async function HistoryPage() {
             <div className="mt-6">
               <Link
                 href="/app/new"
-                className="inline-flex rounded-xl bg-[#6F8373] px-4 py-2 text-sm font-medium text-white shadow-sm"
+                className="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-[#6F8373] px-4 py-2 text-sm font-medium text-white shadow-sm"
               >
                 Start new redesign
               </Link>

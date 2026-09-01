@@ -39,6 +39,12 @@ import {
   hasMatchingImageSignature,
   MAX_IMAGE_UPLOAD_BYTES,
 } from "@/lib/cozylogic/uploads";
+import { normalizeImageTokenUsage } from "@/lib/cozylogic/imageUsage";
+import {
+  logGenerationSubmissionMetric,
+  recordGenerationExecutionMetric,
+} from "@/lib/cozylogic/generationMetrics";
+import { checkDailyImageBudget } from "@/lib/cozylogic/costGuard";
 
 type RoomRow = {
   id: string;
@@ -286,7 +292,10 @@ async function editImage(opts: {
     const img = await openai.images.edit(params);
     const b64 = img.data?.[0]?.b64_json;
     if (!b64) throw new Error("openai_no_image_returned");
-    return Buffer.from(b64, "base64");
+    return {
+      bytes: Buffer.from(b64, "base64"),
+      usage: normalizeImageTokenUsage((img as any).usage),
+    };
   }
 
   return runImageEdit(model);
@@ -333,19 +342,38 @@ async function processRoomGeneration(opts: {
   planState: PlanState;
   didIncrement: boolean;
   prevUsed: number;
+  requestId: string;
+  submitToAcceptedDurationMs: number;
 }) {
-  const { room, userId, planState, didIncrement, prevUsed } = opts;
+  const {
+    room,
+    userId,
+    planState,
+    didIncrement,
+    prevUsed,
+    requestId,
+    submitToAcceptedDurationMs,
+  } = opts;
   const admin = getSupabaseAdminClient();
   const startedAt = Date.now();
-  const { model, quality, size } = getConfiguredImageGeneration({
-    budgetTier: room.budget_tier,
-    defaultQuality: planState.plan === "pro" ? "medium" : "low",
-    defaultSize: "auto",
-  });
+  let model = "unconfigured";
+  let quality: ImageQuality = planState.plan === "pro" ? "medium" : "low";
+  let size: ImageSize = "auto";
   const outputPath = `${userId}/${randomUUID()}.png`;
   let activeStage = "generation_setup";
+  let imageCallCount: 0 | 1 = 0;
+  let openaiGenerationDurationMs: number | null = null;
+  let outputUploadDurationMs: number | null = null;
+  let usage: ReturnType<typeof normalizeImageTokenUsage> = null;
 
   try {
+    activeStage = "generation_configuration";
+    ({ model, quality, size } = getConfiguredImageGeneration({
+      budgetTier: room.budget_tier,
+      defaultQuality: quality,
+      defaultSize: size,
+    }));
+
     const openaiKey = process.env.OPENAI_API_KEY;
     if (!openaiKey) throw new Error("missing_openai_key");
 
@@ -399,6 +427,8 @@ async function processRoomGeneration(opts: {
       : buildRedesignPrompt(room);
 
     activeStage = "openai_call";
+    imageCallCount = 1;
+    const openaiStartedAt = Date.now();
     logGenerationTiming("generate-job", "OpenAI image call started", startedAt, {
       roomId: room.id,
       model,
@@ -408,7 +438,7 @@ async function processRoomGeneration(opts: {
     });
     let finalBytes: Buffer;
     try {
-      finalBytes = await editImage({
+      const imageResult = await editImage({
         openai,
         model,
         prompt,
@@ -418,12 +448,16 @@ async function processRoomGeneration(opts: {
         quality,
         size,
       });
+      finalBytes = imageResult.bytes;
+      usage = imageResult.usage;
+      openaiGenerationDurationMs = Date.now() - openaiStartedAt;
       logGenerationTiming("generate-job", "OpenAI image call finished", startedAt, {
         roomId: room.id,
         outputBytes: finalBytes.byteLength,
         ok: true,
       });
     } catch (error: any) {
+      openaiGenerationDurationMs = Date.now() - openaiStartedAt;
       logGenerationTiming("generate-job", "OpenAI image call finished", startedAt, {
         roomId: room.id,
         ok: false,
@@ -439,11 +473,13 @@ async function processRoomGeneration(opts: {
       roomId: room.id,
       outputPath,
     });
+    const outputUploadStartedAt = Date.now();
     const up = await admin.storage.from(STORAGE_BUCKET_OUTPUTS).upload(outputPath, finalBytes, {
       contentType: "image/png",
       upsert: false,
       cacheControl: "3600",
     });
+    outputUploadDurationMs = Date.now() - outputUploadStartedAt;
     if (up.error) throw up.error;
     logGenerationTiming("generate-job", "Supabase upload finished", startedAt, {
       roomId: room.id,
@@ -491,6 +527,22 @@ async function processRoomGeneration(opts: {
       roomId: room.id,
       finalStage: "generated",
     });
+    await recordGenerationExecutionMetric({
+      audience: "authenticated",
+      budgetTier: room.budget_tier,
+      requestId,
+      model,
+      quality,
+      size,
+      success: true,
+      failureStage: null,
+      imageCallCount,
+      submitToAcceptedDurationMs,
+      openaiGenerationDurationMs,
+      outputUploadDurationMs,
+      totalGenerationDurationMs: submitToAcceptedDurationMs + (Date.now() - startedAt),
+      usage,
+    });
 
     try {
       await pruneUserGenerations(userId);
@@ -514,6 +566,22 @@ async function processRoomGeneration(opts: {
     logServerFailure("generate-job", activeStage, e, {
       roomId: room.id,
       elapsedMs: Date.now() - startedAt,
+    });
+    await recordGenerationExecutionMetric({
+      audience: "authenticated",
+      budgetTier: room.budget_tier,
+      requestId,
+      model,
+      quality,
+      size,
+      success: false,
+      failureStage: activeStage,
+      imageCallCount,
+      submitToAcceptedDurationMs,
+      openaiGenerationDurationMs,
+      outputUploadDurationMs,
+      totalGenerationDurationMs: submitToAcceptedDurationMs + (Date.now() - startedAt),
+      usage,
     });
   }
 }
@@ -594,6 +662,13 @@ export async function POST(req: NextRequest) {
     const existingRoom = await findExistingMatchingRoom(supabase, user.id, room);
 
     if (existingRoom) {
+      logGenerationSubmissionMetric({
+        audience: "authenticated",
+        budgetTier: room.budget_tier,
+        requestId,
+        reused: true,
+        submitToAcceptedDurationMs: Date.now() - requestStartedAt,
+      });
       logGenerationTiming("generate", "response returned", requestStartedAt, {
         requestId,
         roomId: existingRoom.id,
@@ -611,6 +686,13 @@ export async function POST(req: NextRequest) {
     }
 
     if (isGenerating(room) || room.status === "generated") {
+      logGenerationSubmissionMetric({
+        audience: "authenticated",
+        budgetTier: room.budget_tier,
+        requestId,
+        reused: true,
+        submitToAcceptedDurationMs: Date.now() - requestStartedAt,
+      });
       logGenerationTiming("generate", "response returned", requestStartedAt, {
         requestId,
         roomId: room.id,
@@ -623,6 +705,29 @@ export async function POST(req: NextRequest) {
         finalStage: "job_reused",
       });
       return NextResponse.json(getJobResponse(room.id, idempotencyKey, true), { status: 200 });
+    }
+
+    let dailyBudget;
+    try {
+      dailyBudget = await checkDailyImageBudget(getSupabaseAdminClient());
+    } catch (error) {
+      return failure("generation_request_failed", "cost_guard", 503, error, { roomId });
+    }
+    logServerEvent("generate", "cost_guard", {
+      requestId,
+      roomId,
+      allowed: dailyBudget.allowed,
+      reservedJobs: dailyBudget.reservedJobs,
+      limit: dailyBudget.limit,
+    });
+    if (!dailyBudget.allowed) {
+      return failure(
+        "beta_daily_limit_reached",
+        "cost_guard",
+        429,
+        new Error("beta_daily_limit_reached"),
+        { roomId, reservedJobs: dailyBudget.reservedJobs, limit: dailyBudget.limit }
+      );
     }
 
     logGenerationTiming("generate", "generation job creation started", requestStartedAt, {
@@ -665,6 +770,13 @@ export async function POST(req: NextRequest) {
         (ACTIVE_OR_COMPLETED_ROOM_STATUSES.includes(String(currentRoom.status)) ||
           isGenerating(currentRoom))
       ) {
+        logGenerationSubmissionMetric({
+          audience: "authenticated",
+          budgetTier: room.budget_tier,
+          requestId,
+          reused: true,
+          submitToAcceptedDurationMs: Date.now() - requestStartedAt,
+        });
         logGenerationTiming("generate", "response returned", requestStartedAt, {
           requestId,
           roomId: room.id,
@@ -729,6 +841,7 @@ export async function POST(req: NextRequest) {
       generation_error: null,
     };
 
+    const submitToAcceptedDurationMs = Date.now() - requestStartedAt;
     after(async () => {
       await processRoomGeneration({
         room: queuedRoom,
@@ -736,10 +849,19 @@ export async function POST(req: NextRequest) {
         planState,
         didIncrement,
         prevUsed,
+        requestId,
+        submitToAcceptedDurationMs,
       });
     });
     jobAccepted = true;
     pendingUsageRollback = null;
+    logGenerationSubmissionMetric({
+      audience: "authenticated",
+      budgetTier: room.budget_tier,
+      requestId,
+      reused: false,
+      submitToAcceptedDurationMs,
+    });
 
     logGenerationTiming("generate", "response returned", requestStartedAt, {
       requestId,

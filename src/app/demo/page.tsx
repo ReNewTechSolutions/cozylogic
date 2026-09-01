@@ -18,6 +18,8 @@ import StyleTile from "@/components/StyleTile";
 import { readFriendlyApiError } from "@/lib/cozylogic/flowErrors";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 import { validateImageFileMetadata } from "@/lib/cozylogic/uploads";
+import ProductEventOnMount from "@/components/ProductEventOnMount";
+import { PRODUCT_EVENTS, trackProductEvent } from "@/lib/cozylogic/productEvents";
 
 type PreparedUpload = {
   requestId: string;
@@ -51,6 +53,10 @@ export default function DemoPage() {
 
     const validation = validateImageFileMetadata(nextFile);
     if (validation.ok === false) {
+      trackProductEvent(PRODUCT_EVENTS.uploadFailed, {
+        audience: "guest",
+        stage: "file_validation",
+      });
       setFile(null);
       setError(validation.message);
       return;
@@ -62,7 +68,8 @@ export default function DemoPage() {
   async function reportUpload(
     upload: PreparedUpload,
     status: "started" | "succeeded" | "failed",
-    errorCode?: string
+    errorCode?: string,
+    durationMs?: number
   ) {
     try {
       await fetch("/api/demo/upload", {
@@ -74,6 +81,7 @@ export default function DemoPage() {
           sessionToken: upload.sessionToken,
           status,
           errorCode,
+          durationMs,
         }),
       });
     } catch {
@@ -102,6 +110,9 @@ export default function DemoPage() {
 
     setBusy(true);
     let shouldKeepWaiting = false;
+    let failureStage = "upload_preparation";
+    const uploadStartedAt = performance.now();
+    trackProductEvent(PRODUCT_EVENTS.uploadStarted, { audience: "guest" });
 
     try {
       const requestId = crypto.randomUUID();
@@ -136,6 +147,7 @@ export default function DemoPage() {
         throw new Error("The upload setup was incomplete. Please choose the photo again.");
       }
 
+      failureStage = "storage_upload";
       await reportUpload(upload, "started");
       const { error: uploadError } = await supabase.storage
         .from(STORAGE_BUCKET_INPUTS)
@@ -144,11 +156,30 @@ export default function DemoPage() {
           upsert: false,
         });
       if (uploadError) {
-        await reportUpload(upload, "failed", uploadError.name || "storage_upload_failed");
+        const durationMs = Math.round(performance.now() - uploadStartedAt);
+        await reportUpload(
+          upload,
+          "failed",
+          uploadError.name || "storage_upload_failed",
+          durationMs
+        );
+        trackProductEvent(PRODUCT_EVENTS.uploadFailed, {
+          audience: "guest",
+          stage: failureStage,
+        });
         throw new Error("The photo upload did not finish. Check your connection and try again.");
       }
-      await reportUpload(upload, "succeeded");
+      const uploadDurationMs = Math.round(performance.now() - uploadStartedAt);
+      await reportUpload(upload, "succeeded", undefined, uploadDurationMs);
+      trackProductEvent(PRODUCT_EVENTS.uploadSucceeded, {
+        audience: "guest",
+      });
 
+      failureStage = "generation_request";
+      trackProductEvent(PRODUCT_EVENTS.generationSubmitted, {
+        audience: "guest",
+        budget_tier: budgetTier,
+      });
       const res = await fetch("/api/demo/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -168,6 +199,7 @@ export default function DemoPage() {
       const json = await res.json().catch(() => ({} as any));
 
       if (!res.ok) {
+        failureStage = String((json as any)?.stage || "generation_request");
         throw new Error(
           readFriendlyApiError(
             json,
@@ -183,9 +215,26 @@ export default function DemoPage() {
       }
 
       const resultUrl = json.resultUrl ?? `/demo/result/${encodeURIComponent(token)}`;
+      trackProductEvent(PRODUCT_EVENTS.generationAccepted, {
+        audience: "guest",
+        budget_tier: budgetTier,
+        reused: Boolean(json.reused),
+      });
       shouldKeepWaiting = true;
       router.replace(resultUrl);
     } catch (e: any) {
+      if (failureStage === "upload_preparation") {
+        trackProductEvent(PRODUCT_EVENTS.uploadFailed, {
+          audience: "guest",
+          stage: failureStage,
+        });
+      } else if (failureStage !== "storage_upload") {
+        trackProductEvent(PRODUCT_EVENTS.generationFailed, {
+          audience: "guest",
+          budget_tier: budgetTier,
+          stage: failureStage,
+        });
+      }
       setError(e?.message ?? "We could not start the room preview. Please try again.");
     } finally {
       if (!shouldKeepWaiting) {
@@ -197,6 +246,7 @@ export default function DemoPage() {
 
   return (
     <main className="min-h-screen bg-[#F7EFE3] text-[#1F1F1F]">
+      <ProductEventOnMount name={PRODUCT_EVENTS.demoStarted} />
       <div className="mx-auto max-w-[980px] px-5 py-8 sm:px-6 sm:py-12">
         <div>
           <div className="inline-flex rotate-[-1deg] rounded-lg border border-[#DFC588] bg-[#F7E3A6] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#5F4A2E] shadow-sm">
